@@ -17,6 +17,8 @@ public sealed class LoopRunner
     public event EventHandler<string>? Status;
     public event EventHandler<(int current, int max)>? IterationChanged;
     public event EventHandler<string>? PromptInjected;
+    public event EventHandler<string>? SessionCaptured;
+    public event EventHandler<(long input, long output, long cached)>? TokenUsageReported;
 
     public bool IsRunning => _cts != null;
 
@@ -28,6 +30,7 @@ public sealed class LoopRunner
         _codexWatcher.SessionIdCaptured += (_, sid) =>
         {
             _capturedSessionId = sid;
+            SessionCaptured?.Invoke(this, sid);
             Output?.Invoke(this, $"[session] codex session={sid}\n");
         };
     }
@@ -69,7 +72,12 @@ public sealed class LoopRunner
                 _formatter = settings.Tool == CliTool.ClaudeCode ? new StreamJsonFormatter() : null;
                 if (_formatter != null)
                 {
-                    _formatter.SessionIdCaptured += (_, sid) => _capturedSessionId = sid;
+                    _formatter.SessionIdCaptured += (_, sid) =>
+                    {
+                        _capturedSessionId = sid;
+                        SessionCaptured?.Invoke(this, sid);
+                    };
+                    _formatter.TokenUsageReported += (_, u) => TokenUsageReported?.Invoke(this, u);
                 }
 
                 IterationChanged?.Invoke(this, (iter, effectiveMax));

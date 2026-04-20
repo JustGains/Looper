@@ -49,6 +49,31 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    private bool _isEditingName;
+    public bool IsEditingName
+    {
+        get => _isEditingName;
+        private set { if (_isEditingName != value) { _isEditingName = value; OnChanged(); } }
+    }
+
+    private string? _nameBeforeEdit;
+
+    public void BeginRename()
+    {
+        if (IsEditingName) return;
+        _nameBeforeEdit = _settings.Name;
+        IsEditingName = true;
+    }
+
+    public void CommitRename() => IsEditingName = false;
+
+    public void CancelRename()
+    {
+        if (_nameBeforeEdit != null) Name = _nameBeforeEdit;
+        _nameBeforeEdit = null;
+        IsEditingName = false;
+    }
+
     // Engine settings (persisted to conversation's settings.json)
     public CliTool Tool
     {
@@ -230,6 +255,47 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
 
     public string StartStopText => IsRunning ? "Stop" : "Start";
 
+    private string? _currentSessionId;
+    public string? CurrentSessionId
+    {
+        get => _currentSessionId;
+        private set
+        {
+            if (_currentSessionId == value) return;
+            _currentSessionId = value;
+            OnChanged();
+            OnChanged(nameof(HasSession));
+            OnChanged(nameof(SessionShort));
+        }
+    }
+
+    public bool HasSession => !string.IsNullOrEmpty(_currentSessionId);
+    public string SessionShort
+    {
+        get
+        {
+            var s = _currentSessionId;
+            if (string.IsNullOrEmpty(s)) return "";
+            return s.Length > 12 ? s.Substring(0, 8) + "…" + s.Substring(s.Length - 4) : s;
+        }
+    }
+
+    private long _inputTokens, _outputTokens, _cachedTokens;
+    public long InputTokens { get => _inputTokens; private set { if (_inputTokens != value) { _inputTokens = value; OnChanged(); OnChanged(nameof(TokenSummary)); } } }
+    public long OutputTokens { get => _outputTokens; private set { if (_outputTokens != value) { _outputTokens = value; OnChanged(); OnChanged(nameof(TokenSummary)); } } }
+    public long CachedTokens { get => _cachedTokens; private set { if (_cachedTokens != value) { _cachedTokens = value; OnChanged(); OnChanged(nameof(TokenSummary)); } } }
+
+    public string TokenSummary
+    {
+        get
+        {
+            if (_inputTokens == 0 && _outputTokens == 0) return "";
+            var s = $"{_inputTokens:N0} in · {_outputTokens:N0} out";
+            if (_cachedTokens > 0) s += $" · {_cachedTokens:N0} cached";
+            return s;
+        }
+    }
+
     public ConversationViewModel(string workingDirectory, ConversationSettings settings, Action persistSettings)
     {
         _workingDirectory = workingDirectory;
@@ -290,6 +356,17 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
             _promptAtLastInjection = p;
             PromptPendingChange = false;
         });
+        _loopRunner.SessionCaptured += (_, sid) => Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            CurrentSessionId = sid;
+        });
+        _loopRunner.TokenUsageReported += (_, u) => Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            // Result events carry per-turn usage — accumulate across iterations.
+            InputTokens += u.input;
+            OutputTokens += u.output;
+            CachedTokens += u.cached;
+        });
 
         _prompt = _promptStore.LoadPrompt();
         _tasksFile.Watch(TasksFile);
@@ -314,6 +391,9 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         _promptStore.FlushPrompt();
         _promptAtLastInjection = null;
         PromptPendingChange = false;
+        InputTokens = 0;
+        OutputTokens = 0;
+        CachedTokens = 0;
         IsRunning = true;
         Status = "Running";
         CurrentIteration = 0;

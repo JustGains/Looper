@@ -12,6 +12,7 @@ public sealed class StreamJsonFormatter
     private readonly StringBuilder _toolInputBuf = new();
 
     public event EventHandler<string>? SessionIdCaptured;
+    public event EventHandler<(long input, long output, long cached)>? TokenUsageReported;
 
     public string Format(string line)
     {
@@ -170,7 +171,7 @@ public sealed class StreamJsonFormatter
         return sb.ToString();
     }
 
-    private static string FormatResult(JsonElement root)
+    private string FormatResult(JsonElement root)
     {
         var subtype = GetString(root, "subtype") ?? "";
         var parts = new List<string>();
@@ -190,6 +191,8 @@ public sealed class StreamJsonFormatter
                 var s = $"{(inTok ?? 0):N0} in / {(outTok ?? 0):N0} out";
                 if (cached != null && cached > 0) s += $" ({cached:N0} cached)";
                 parts.Add(s);
+                TokenUsageReported?.Invoke(this,
+                    ((long)(inTok ?? 0), (long)(outTok ?? 0), (long)(cached ?? 0)));
             }
         }
         var detail = parts.Count > 0 ? " " + string.Join(" · ", parts) : "";

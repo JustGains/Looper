@@ -384,6 +384,59 @@ public partial class MainWindow : Window
 
     private void AddProject_Click(object sender, RoutedEventArgs e)
     {
+        if (sender is not Button btn) return;
+
+        var openPaths = new HashSet<string>(
+            _vm.Projects.Select(p => p.WorkingDirectory),
+            StringComparer.OrdinalIgnoreCase);
+        var recents = _vm.RecentWorkingDirectories
+            .Where(d => !openPaths.Contains(d))
+            .Take(8)
+            .ToList();
+
+        var menu = new ContextMenu
+        {
+            PlacementTarget = btn,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+            HasDropShadow = true,
+        };
+
+        foreach (var path in recents)
+        {
+            var leaf = Path.GetFileName(path.TrimEnd('\\', '/'));
+            if (string.IsNullOrEmpty(leaf)) leaf = path;
+            var item = new MenuItem
+            {
+                Tag = path,
+                Header = new StackPanel
+                {
+                    Orientation = Orientation.Vertical,
+                    Children =
+                    {
+                        new TextBlock { Text = leaf, FontWeight = FontWeights.SemiBold },
+                        new TextBlock { Text = path, Opacity = 0.6, FontSize = 10 },
+                    },
+                },
+            };
+            item.Click += (_, _) =>
+            {
+                if (item.Tag is string p) _vm.AddProject(p);
+            };
+            menu.Items.Add(item);
+        }
+
+        if (recents.Count > 0)
+            menu.Items.Add(new Separator());
+
+        var openNew = new MenuItem { Header = "Open new workspace…" };
+        openNew.Click += (_, _) => OpenFolderPickerAndAdd();
+        menu.Items.Add(openNew);
+
+        menu.IsOpen = true;
+    }
+
+    private void OpenFolderPickerAndAdd()
+    {
         var dlg = new OpenFolderDialog
         {
             Title = "Add project — select working directory",
@@ -391,6 +444,52 @@ public partial class MainWindow : Window
         };
         if (dlg.ShowDialog(this) == true)
             _vm.AddProject(dlg.FolderName);
+    }
+
+    // ---- inline rename of conversation ----
+
+    private void ConvName_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (e.ClickCount != 2) return;
+        if (sender is TextBlock tb && tb.DataContext is ConversationViewModel c)
+        {
+            c.BeginRename();
+            e.Handled = true;
+        }
+    }
+
+    private void ConvNameEdit_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (sender is TextBox tb && (bool)e.NewValue)
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                tb.Focus();
+                tb.SelectAll();
+            }), System.Windows.Threading.DispatcherPriority.Input);
+        }
+    }
+
+    private void ConvNameEdit_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (sender is not TextBox tb) return;
+        if (e.Key == System.Windows.Input.Key.Enter)
+        {
+            tb.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            (tb.DataContext as ConversationViewModel)?.CommitRename();
+            e.Handled = true;
+        }
+        else if (e.Key == System.Windows.Input.Key.Escape)
+        {
+            (tb.DataContext as ConversationViewModel)?.CancelRename();
+            e.Handled = true;
+        }
+    }
+
+    private void ConvNameEdit_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox tb && tb.DataContext is ConversationViewModel c && c.IsEditingName)
+            c.CommitRename();
     }
 
     private void CloseTab_Click(object sender, RoutedEventArgs e)
