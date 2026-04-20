@@ -141,6 +141,7 @@ public sealed class CliProcessRunner
                     "--verbose",
                     "--output-format", "stream-json",
                     "--include-partial-messages",
+                    "--thinking-display", "summarized",
                 };
                 if (continueSession && !string.IsNullOrEmpty(sessionId))
                 {

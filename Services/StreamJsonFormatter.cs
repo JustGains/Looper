@@ -11,8 +11,18 @@ public sealed class StreamJsonFormatter
     private string? _activeToolName;
     private readonly StringBuilder _toolInputBuf = new();
 
+    /// True while a `thinking` block is currently being streamed. Consumers
+    /// (e.g. LoopRunner) can use this to relax the inactivity timeout — some
+    /// models go silent for minutes while reasoning.
+    public bool IsInThinking => string.Equals(_activeBlockKind, "thinking", StringComparison.Ordinal);
+
     public event EventHandler<string>? SessionIdCaptured;
     public event EventHandler<(long input, long output, long cached)>? TokenUsageReported;
+    /// Fires with a count of characters appended to the current assistant
+    /// message (text + thinking + tool_use input JSON). Consumers convert to
+    /// an estimated token count (≈ chars / 3.7) until the actual `result`
+    /// usage arrives and corrects it.
+    public event EventHandler<int>? EstimatedOutputCharsAppended;
 
     public string Format(string line)
     {
@@ -104,7 +114,9 @@ public sealed class StreamJsonFormatter
             case "text":
                 return "";
             case "thinking":
-                return "\n--- thinking ---\n";
+                return "\n🧠 thinking…\n│ ";
+            case "redacted_thinking":
+                return "\n🧠 thinking (redacted)\n│ [encrypted thinking — not shown]\n";
             case "tool_use":
                 _activeToolName = GetString(block, "name") ?? "?";
                 return "";
@@ -120,13 +132,26 @@ public sealed class StreamJsonFormatter
         switch (dtype)
         {
             case "text_delta":
-                return GetString(delta, "text") ?? "";
+            {
+                var t = GetString(delta, "text") ?? "";
+                if (t.Length > 0) EstimatedOutputCharsAppended?.Invoke(this, t.Length);
+                return t;
+            }
             case "thinking_delta":
-                return GetString(delta, "thinking") ?? "";
+            {
+                var th = GetString(delta, "thinking") ?? "";
+                if (th.Length > 0) EstimatedOutputCharsAppended?.Invoke(this, th.Length);
+                // Preserve the `│ ` gutter on every new line inside the
+                // thinking block so the styling rule can match them.
+                return th.Replace("\n", "\n│ ");
+            }
             case "input_json_delta":
+            {
                 var partial = GetString(delta, "partial_json") ?? "";
                 _toolInputBuf.Append(partial);
+                if (partial.Length > 0) EstimatedOutputCharsAppended?.Invoke(this, partial.Length);
                 return "";
+            }
             default:
                 return "";
         }
@@ -144,7 +169,9 @@ public sealed class StreamJsonFormatter
             _activeToolName = null;
             return $"\n▸ {name}({SummariseToolInput(input)})\n";
         }
-        if (kind == "text" || kind == "thinking")
+        if (kind == "thinking")
+            return "\n";
+        if (kind == "text")
             return "\n";
         return "";
     }

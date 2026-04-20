@@ -15,4 +15,9 @@ public sealed class ConversationSettings
     public string? ClaudeEffort { get; set; }
     public string? CodexModel { get; set; }
     public string? CodexEffort { get; set; }
+
+    /// Map of short `@label` (the portion after '@', e.g. "WorkoutScreen.tsx"
+    /// or "workout/WorkoutScreen.tsx" for disambiguation) → full relative path.
+    /// The TextBox stores `@label`; the loop runner submits the expanded form.
+    public Dictionary<string, string> MentionMap { get; set; } = new();
 }

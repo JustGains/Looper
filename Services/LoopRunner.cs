@@ -19,6 +19,8 @@ public sealed class LoopRunner
     public event EventHandler<string>? PromptInjected;
     public event EventHandler<string>? SessionCaptured;
     public event EventHandler<(long input, long output, long cached)>? TokenUsageReported;
+    public event EventHandler<int>? EstimatedInputCharsSet;
+    public event EventHandler<int>? EstimatedOutputCharsAppended;
 
     public bool IsRunning => _cts != null;
 
@@ -47,7 +49,7 @@ public sealed class LoopRunner
             Output?.Invoke(this, chunk);
     }
 
-    public async Task RunAsync(Func<string> promptProvider, ConversationSettings settings, string workingDirectory)
+    public async Task RunAsync(Func<string> promptProvider, ConversationSettings settings, string workingDirectory, string tasksRelativePath)
     {
         if (IsRunning) return;
 
@@ -67,7 +69,7 @@ public sealed class LoopRunner
             while (iter <= effectiveMax && !cts.IsCancellationRequested)
             {
                 var currentPrompt = promptProvider();
-                var wrapped = BuildWrappedPrompt(currentPrompt, effectiveMax);
+                var wrapped = BuildWrappedPrompt(currentPrompt, effectiveMax, tasksRelativePath);
 
                 _formatter = settings.Tool == CliTool.ClaudeCode ? new StreamJsonFormatter() : null;
                 if (_formatter != null)
@@ -78,7 +80,13 @@ public sealed class LoopRunner
                         SessionCaptured?.Invoke(this, sid);
                     };
                     _formatter.TokenUsageReported += (_, u) => TokenUsageReported?.Invoke(this, u);
+                    _formatter.EstimatedOutputCharsAppended += (_, n) =>
+                        EstimatedOutputCharsAppended?.Invoke(this, n);
                 }
+
+                // At the start of each iteration fire the estimated input
+                // chars — wrapped prompt length is the model's input payload.
+                EstimatedInputCharsSet?.Invoke(this, wrapped.Length);
 
                 IterationChanged?.Invoke(this, (iter, effectiveMax));
                 PromptInjected?.Invoke(this, currentPrompt);
@@ -137,10 +145,18 @@ public sealed class LoopRunner
         }
     }
 
+    /// Multiplier applied to the base inactivity timeout while the model is
+    /// in a thinking block (no output streamed). Gives long reasoning passes
+    /// breathing room without letting genuinely stuck iterations run forever.
+    private const double ThinkingTimeoutFactor = 3.0;
+
+    private double _baseInactivityMs;
+
     private void StartInactivity(int timeoutSec)
     {
         StopInactivity();
-        _inactivityTimer = new System.Timers.Timer(Math.Max(1, timeoutSec) * 1000.0) { AutoReset = false };
+        _baseInactivityMs = Math.Max(1, timeoutSec) * 1000.0;
+        _inactivityTimer = new System.Timers.Timer(_baseInactivityMs) { AutoReset = false };
         _inactivityTimer.Elapsed += (_, _) =>
         {
             _inactivityTripped = true;
@@ -152,11 +168,13 @@ public sealed class LoopRunner
     private void ResetInactivity()
     {
         var t = _inactivityTimer;
-        if (t != null)
-        {
-            t.Stop();
-            t.Start();
-        }
+        if (t == null) return;
+        t.Stop();
+        // If the model is currently inside a thinking block, extend the
+        // tolerance — some models stop emitting for 30-90s during reasoning.
+        var factor = _formatter?.IsInThinking == true ? ThinkingTimeoutFactor : 1.0;
+        t.Interval = _baseInactivityMs * factor;
+        t.Start();
     }
 
     private void StopInactivity()
@@ -167,12 +185,15 @@ public sealed class LoopRunner
         t?.Dispose();
     }
 
-    private static string BuildWrappedPrompt(string userPrompt, int maxIter) =>
-        $@"Track work in `.looper/tasks.md` (relative to cwd). Create it if missing. Use GitHub checkbox syntax (`- [ ]` / `- [x]`). Append new tasks as you discover them, tick boxes in place as you finish. Do not rewrite the file from scratch.
+    private static string BuildWrappedPrompt(string userPrompt, int maxIter, string tasksRelativePath)
+    {
+        var tp = string.IsNullOrWhiteSpace(tasksRelativePath) ? ".looper/tasks.md" : tasksRelativePath.Replace('\\', '/');
+        return $@"Track work in `{tp}` (relative to cwd). Create it if missing. Use GitHub checkbox syntax (`- [ ]` / `- [x]`). Append new tasks as you discover them, tick boxes in place as you finish. Do not rewrite the file from scratch.
 
 In this run, do as much useful work as you can — complete as many tasks as possible before stopping. Do NOT stop after a single task. Keep going until the list is done, you are blocked, or there is nothing sensible left to do.
 
 --- USER PROMPT ---
 {userPrompt}
 ";
+    }
 }

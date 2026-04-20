@@ -21,6 +21,12 @@ public partial class MainWindow : Window
     private static readonly Regex ToolHeaderLine = new(@"^▸\s.+?\(", RegexOptions.Compiled);
     private static readonly Regex ToolResultLine = new(@"^⎿\s", RegexOptions.Compiled);
 
+    // @-mention state
+    private readonly Dictionary<string, FileMentionIndex> _mentionIndexes = new(StringComparer.OrdinalIgnoreCase);
+    private int _mentionTokenStart = -1; // position of '@' in the PromptBox when popup is active
+    private static readonly Regex MentionRef = new(
+        @"@(?:""([^""]+)""|([^\s""]+))", RegexOptions.Compiled);
+
     public MainWindow()
     {
         InitializeComponent();
@@ -42,6 +48,7 @@ public partial class MainWindow : Window
             SubscribeToSelectedProject();
             AttachSelectedConversationDocument();
             ApplyWordWrap();
+            AttachMentionHighlightAdorner();
         };
 
         Closing += (_, _) => _vm.SaveWindowBounds(Left, Top, Width, Height);
@@ -132,6 +139,8 @@ public partial class MainWindow : Window
             AttachSelectedConversationDocument();
             ApplyWordWrap();
             QueueScrollTasks();
+            CloseMentionPopup();
+            HideMentionTooltip();
         }
     }
 
@@ -378,6 +387,288 @@ public partial class MainWindow : Window
         }
         if (pos < seg.Length) sb.Append(seg, pos, seg.Length - pos);
         return (sb.ToString(), hard);
+    }
+
+    private void AttachMentionHighlightAdorner()
+    {
+        try
+        {
+            var layer = System.Windows.Documents.AdornerLayer.GetAdornerLayer(PromptBox);
+            if (layer == null) return;
+            // Don't double-add.
+            var existing = layer.GetAdorners(PromptBox);
+            if (existing != null && existing.Any(a => a is MentionHighlightAdorner)) return;
+            layer.Add(new MentionHighlightAdorner(PromptBox));
+        }
+        catch { }
+    }
+
+    // ---------- prompt @-mention ----------
+
+    private FileMentionIndex? GetIndexForCurrentProject()
+    {
+        var dir = _vm.SelectedProject?.WorkingDirectory;
+        if (string.IsNullOrEmpty(dir)) return null;
+        if (!_mentionIndexes.TryGetValue(dir, out var idx))
+        {
+            idx = new FileMentionIndex(dir);
+            _mentionIndexes[dir] = idx;
+        }
+        return idx;
+    }
+
+    private (int start, int end, string token)? CurrentCaretToken()
+    {
+        var text = PromptBox.Text ?? "";
+        var caret = PromptBox.CaretIndex;
+        if (caret < 0 || caret > text.Length) return null;
+        int start = caret;
+        while (start > 0 && !char.IsWhiteSpace(text[start - 1])) start--;
+        int end = caret;
+        while (end < text.Length && !char.IsWhiteSpace(text[end])) end++;
+        return (start, end, text.Substring(start, end - start));
+    }
+
+    private void PromptBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        UpdateMentionPopup();
+    }
+
+    private void PromptBox_SelectionChanged(object sender, RoutedEventArgs e)
+    {
+        UpdateMentionPopup();
+        AutoSelectMentionIfCaretInside();
+    }
+
+    /// If the caret lands inside an @ref token and nothing is yet selected,
+    /// select the whole token so it behaves as an atomic chip (type/delete
+    /// replaces the whole thing rather than editing the hidden full path).
+    private bool _autoSelecting;
+    private void AutoSelectMentionIfCaretInside()
+    {
+        if (_autoSelecting) return;
+        if (PromptBox.SelectionLength > 0) return;
+        var text = PromptBox.Text ?? "";
+        if (string.IsNullOrEmpty(text)) return;
+        var caret = PromptBox.CaretIndex;
+        foreach (Match m in MentionRef.Matches(text))
+        {
+            if (caret > m.Index && caret < m.Index + m.Length)
+            {
+                _autoSelecting = true;
+                try
+                {
+                    PromptBox.Select(m.Index, m.Length);
+                }
+                finally { _autoSelecting = false; }
+                break;
+            }
+        }
+    }
+
+    private void PromptBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        // Popup's StaysOpen="False" already closes on outside-click;
+        // this backs it up if focus moves via keyboard.
+        if (MentionPopup.IsOpen && !MentionList.IsKeyboardFocusWithin)
+            CloseMentionPopup();
+    }
+
+    private void UpdateMentionPopup()
+    {
+        var tok = CurrentCaretToken();
+        if (tok is null)
+        {
+            CloseMentionPopup();
+            return;
+        }
+        var (start, _, token) = tok.Value;
+        // Only trigger when the token starts with '@' AND has at least one
+        // character after it (codex parity).
+        if (token.Length < 2 || token[0] != '@')
+        {
+            CloseMentionPopup();
+            return;
+        }
+
+        var query = token.Substring(1).Trim('"');
+        var idx = GetIndexForCurrentProject();
+        if (idx == null)
+        {
+            CloseMentionPopup();
+            return;
+        }
+
+        var results = idx.Search(query);
+        if (results.Count == 0)
+        {
+            CloseMentionPopup();
+            return;
+        }
+
+        MentionList.ItemsSource = results;
+        if (MentionList.SelectedIndex < 0) MentionList.SelectedIndex = 0;
+        _mentionTokenStart = start;
+        PositionMentionPopup();
+        MentionPopup.IsOpen = true;
+    }
+
+    private void PositionMentionPopup()
+    {
+        try
+        {
+            var rect = PromptBox.GetRectFromCharacterIndex(_mentionTokenStart);
+            if (rect.IsEmpty) return;
+            MentionPopup.HorizontalOffset = rect.X;
+            MentionPopup.VerticalOffset = rect.Y + rect.Height + 2;
+        }
+        catch { }
+    }
+
+    private void CloseMentionPopup()
+    {
+        if (!MentionPopup.IsOpen) return;
+        MentionPopup.IsOpen = false;
+        _mentionTokenStart = -1;
+    }
+
+    private void AcceptMentionSelection()
+    {
+        if (!MentionPopup.IsOpen) return;
+        if (MentionList.SelectedItem is not string fullPath) return;
+        if (_mentionTokenStart < 0) return;
+
+        var conv = _vm.SelectedProject?.SelectedConversation;
+        if (conv == null) return;
+
+        // Register the full path and use a short label in the visible prompt.
+        var shortLabel = conv.RegisterMention(fullPath);
+
+        var text = PromptBox.Text ?? "";
+        int start = _mentionTokenStart;
+        int end = start;
+        while (end < text.Length && !char.IsWhiteSpace(text[end])) end++;
+
+        var insert = "@" + FileMentionIndex.QuoteIfNeeded(shortLabel) + " ";
+        var newText = text.Substring(0, start) + insert + text.Substring(end);
+        var newCaret = start + insert.Length;
+
+        PromptBox.TextChanged -= PromptBox_TextChanged;
+        try
+        {
+            PromptBox.Text = newText;
+            PromptBox.CaretIndex = newCaret;
+        }
+        finally
+        {
+            PromptBox.TextChanged += PromptBox_TextChanged;
+        }
+
+        PromptBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        CloseMentionPopup();
+    }
+
+    private void PromptBox_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        // Ctrl+Enter submits regardless of popup state — always takes
+        // precedence so a pending @-mention popup doesn't swallow it.
+        if (e.Key == System.Windows.Input.Key.Enter &&
+            (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control)
+                == System.Windows.Input.ModifierKeys.Control)
+        {
+            e.Handled = true;
+            CloseMentionPopup();
+            // Flush the binding so the VM has the latest prompt before running.
+            PromptBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            StartStop_Click(this, new RoutedEventArgs());
+            return;
+        }
+
+        if (!MentionPopup.IsOpen) return;
+        int count = MentionList.Items.Count;
+        if (count == 0) return;
+        switch (e.Key)
+        {
+            case System.Windows.Input.Key.Up:
+                MentionList.SelectedIndex = (MentionList.SelectedIndex - 1 + count) % count;
+                MentionList.ScrollIntoView(MentionList.SelectedItem);
+                e.Handled = true;
+                break;
+            case System.Windows.Input.Key.Down:
+                MentionList.SelectedIndex = (MentionList.SelectedIndex + 1) % count;
+                MentionList.ScrollIntoView(MentionList.SelectedItem);
+                e.Handled = true;
+                break;
+            case System.Windows.Input.Key.Tab:
+            case System.Windows.Input.Key.Enter:
+                AcceptMentionSelection();
+                e.Handled = true;
+                break;
+            case System.Windows.Input.Key.Escape:
+                CloseMentionPopup();
+                e.Handled = true;
+                break;
+        }
+    }
+
+    // ---------- hover tooltip for @refs ----------
+
+    private int _lastTooltipCharIndex = -1;
+
+    private void PromptBox_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        try
+        {
+            var pt = e.GetPosition(PromptBox);
+            int ci = PromptBox.GetCharacterIndexFromPoint(pt, snapToText: false);
+            if (ci < 0 || ci > (PromptBox.Text?.Length ?? 0))
+            {
+                HideMentionTooltip();
+                return;
+            }
+            var text = PromptBox.Text ?? "";
+            Match? hit = null;
+            foreach (Match m in MentionRef.Matches(text))
+            {
+                if (ci >= m.Index && ci <= m.Index + m.Length - 1)
+                {
+                    hit = m;
+                    break;
+                }
+            }
+            if (hit == null)
+            {
+                HideMentionTooltip();
+                return;
+            }
+            var label = hit.Groups[1].Success ? hit.Groups[1].Value : hit.Groups[2].Value;
+            var conv = _vm.SelectedProject?.SelectedConversation;
+            string display = label;
+            if (conv != null && conv.TryGetMentionFullPath(label, out var full))
+                display = full;
+            // Don't reposition on every pixel move if caret hasn't changed.
+            if (hit.Index == _lastTooltipCharIndex && MentionTooltipPopup.IsOpen) return;
+            _lastTooltipCharIndex = hit.Index;
+
+            MentionTooltipText.Text = display;
+            var rect = PromptBox.GetRectFromCharacterIndex(hit.Index);
+            if (!rect.IsEmpty)
+            {
+                MentionTooltipPopup.HorizontalOffset = rect.X;
+                MentionTooltipPopup.VerticalOffset = rect.Y - 26;
+            }
+            MentionTooltipPopup.IsOpen = true;
+        }
+        catch { HideMentionTooltip(); }
+    }
+
+    private void PromptBox_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e) =>
+        HideMentionTooltip();
+
+    private void HideMentionTooltip()
+    {
+        _lastTooltipCharIndex = -1;
+        if (MentionTooltipPopup.IsOpen) MentionTooltipPopup.IsOpen = false;
     }
 
     // ---------- commands ----------

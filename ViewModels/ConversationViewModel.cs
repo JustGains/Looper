@@ -285,13 +285,25 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     public long OutputTokens { get => _outputTokens; private set { if (_outputTokens != value) { _outputTokens = value; OnChanged(); OnChanged(nameof(TokenSummary)); } } }
     public long CachedTokens { get => _cachedTokens; private set { if (_cachedTokens != value) { _cachedTokens = value; OnChanged(); OnChanged(nameof(TokenSummary)); } } }
 
+    // In-progress iteration estimates (reset when actual usage arrives).
+    private long _estInputChars;
+    private long _estOutputChars;
+    private DateTime _lastTokenNotify = DateTime.MinValue;
+
+    // ≈ 3.7 chars per token is a reasonable English approximation.
+    private static long CharsToTokens(long chars) =>
+        chars <= 0 ? 0 : Math.Max(1L, (long)(chars / 3.7));
+
     public string TokenSummary
     {
         get
         {
-            if (_inputTokens == 0 && _outputTokens == 0) return "";
-            var s = $"{_inputTokens:N0} in · {_outputTokens:N0} out";
+            long inDisplay = _inputTokens + CharsToTokens(_estInputChars);
+            long outDisplay = _outputTokens + CharsToTokens(_estOutputChars);
+            if (inDisplay == 0 && outDisplay == 0) return "";
+            var s = $"{inDisplay:N0} in · {outDisplay:N0} out";
             if (_cachedTokens > 0) s += $" · {_cachedTokens:N0} cached";
+            if (_estInputChars > 0 || _estOutputChars > 0) s += " · est";
             return s;
         }
     }
@@ -362,11 +374,37 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         });
         _loopRunner.TokenUsageReported += (_, u) => Application.Current?.Dispatcher.BeginInvoke(() =>
         {
-            // Result events carry per-turn usage — accumulate across iterations.
+            // Result events carry per-turn usage — accumulate across iterations
+            // and reset the in-progress estimate for that iteration.
             InputTokens += u.input;
             OutputTokens += u.output;
             CachedTokens += u.cached;
+            _estInputChars = 0;
+            _estOutputChars = 0;
+            OnChanged(nameof(TokenSummary));
         });
+        _loopRunner.EstimatedInputCharsSet += (_, n) => Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            // New iteration started. Reset the in-progress estimates to just
+            // this iteration's input payload.
+            _estInputChars = n;
+            _estOutputChars = 0;
+            OnChanged(nameof(TokenSummary));
+        });
+        _loopRunner.EstimatedOutputCharsAppended += (_, n) =>
+        {
+            // Background-thread event — dispatch and throttle UI updates.
+            Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                _estOutputChars += n;
+                var now = DateTime.UtcNow;
+                if ((now - _lastTokenNotify).TotalMilliseconds >= 120)
+                {
+                    _lastTokenNotify = now;
+                    OnChanged(nameof(TokenSummary));
+                }
+            });
+        };
 
         _prompt = _promptStore.LoadPrompt();
         _tasksFile.Watch(TasksFile);
@@ -394,6 +432,9 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         InputTokens = 0;
         OutputTokens = 0;
         CachedTokens = 0;
+        _estInputChars = 0;
+        _estOutputChars = 0;
+        OnChanged(nameof(TokenSummary));
         IsRunning = true;
         Status = "Running";
         CurrentIteration = 0;
@@ -405,7 +446,11 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         OnChanged(nameof(IterationLabel));
         try
         {
-            await _loopRunner.RunAsync(() => _prompt, _settings, _workingDirectory);
+            var tasksRel = System.IO.Path.Combine(".looper", "conversations", Id, "tasks.md")
+                .Replace('\\', '/');
+            await _loopRunner.RunAsync(
+                () => ExpandPromptForSubmission(_prompt),
+                _settings, _workingDirectory, tasksRel);
         }
         finally
         {
@@ -421,6 +466,63 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     public void StopIfRunning()
     {
         if (IsRunning) _loopRunner.Stop();
+    }
+
+    public void NotifyMaxIterChanged() => OnChanged(nameof(IterationLabel));
+
+    // ---------- @-mention map (short label ↔ full relative path) ----------
+    private static readonly System.Text.RegularExpressions.Regex MentionRefRegex = new(
+        @"@(?:""([^""\r\n]+)""|([^\s""]+))",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    public string RegisterMention(string fullPath)
+    {
+        if (string.IsNullOrWhiteSpace(fullPath)) return fullPath;
+        var norm = fullPath.Replace('\\', '/').TrimStart('/').TrimEnd('/');
+
+        foreach (var kv in _settings.MentionMap)
+            if (string.Equals(kv.Value, norm, StringComparison.OrdinalIgnoreCase))
+                return kv.Key;
+
+        var parts = norm.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (int start = parts.Length - 1; start >= 0; start--)
+        {
+            var candidate = string.Join('/', parts.Skip(start));
+            if (!_settings.MentionMap.TryGetValue(candidate, out var existing))
+            {
+                _settings.MentionMap[candidate] = norm;
+                PersistSettings();
+                return candidate;
+            }
+            if (string.Equals(existing, norm, StringComparison.OrdinalIgnoreCase))
+                return candidate;
+        }
+        _settings.MentionMap[norm] = norm;
+        PersistSettings();
+        return norm;
+    }
+
+    public string ExpandPromptForSubmission(string text)
+    {
+        if (string.IsNullOrEmpty(text) || _settings.MentionMap.Count == 0) return text;
+        return MentionRefRegex.Replace(text, m =>
+        {
+            var label = m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value;
+            if (_settings.MentionMap.TryGetValue(label, out var full))
+                return "@" + (full.Any(c => c is ' ' or '\t') ? "\"" + full + "\"" : full);
+            return m.Value;
+        });
+    }
+
+    public bool TryGetMentionFullPath(string label, out string fullPath)
+    {
+        if (_settings.MentionMap.TryGetValue(label, out var v))
+        {
+            fullPath = v;
+            return true;
+        }
+        fullPath = "";
+        return false;
     }
 
     public void Shutdown()

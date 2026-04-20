@@ -1103,12 +1103,87 @@
                     </DockPanel>
                 </Border>
                 <Border Style="{StaticResource PaneFrame}">
-                    <TextBox x:Name="PromptBox"
-                             Text="{Binding Prompt, UpdateSourceTrigger=PropertyChanged}"
-                             AcceptsReturn="True" AcceptsTab="True"
-                             TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                             BorderThickness="0" Background="Transparent"
-                             FontFamily="Cascadia Mono, Consolas" FontSize="13" Padding="10,8"/>
+                    <Grid>
+                            <TextBox x:Name="PromptBox"
+                                     Text="{Binding Prompt, UpdateSourceTrigger=PropertyChanged}"
+                                     AcceptsReturn="True" AcceptsTab="True"
+                                     TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                     BorderThickness="0" Background="Transparent"
+                                     FontFamily="Cascadia Mono, Consolas" FontSize="13" Padding="10,8"
+                                     TextChanged="PromptBox_TextChanged"
+                                     SelectionChanged="PromptBox_SelectionChanged"
+                                     PreviewKeyDown="PromptBox_PreviewKeyDown"
+                                     LostFocus="PromptBox_LostFocus"
+                                     MouseMove="PromptBox_MouseMove"
+                                     MouseLeave="PromptBox_MouseLeave"/>
+
+                            <!-- @-mention popup -->
+                            <Popup x:Name="MentionPopup"
+                                   PlacementTarget="{Binding ElementName=PromptBox}"
+                                   Placement="Relative"
+                                   AllowsTransparency="True" StaysOpen="False"
+                                   Focusable="False" PopupAnimation="Fade">
+                                <Border Background="{StaticResource BgSurface}"
+                                        BorderBrush="{StaticResource Border1}" BorderThickness="1"
+                                        CornerRadius="4" Padding="2" MinWidth="320">
+                                    <ListBox x:Name="MentionList"
+                                             Background="Transparent" BorderThickness="0"
+                                             Foreground="{StaticResource FgPrimary}"
+                                             MaxHeight="200"
+                                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                        <ListBox.ItemContainerStyle>
+                                            <Style TargetType="ListBoxItem">
+                                                <Setter Property="Padding" Value="8,4"/>
+                                                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                                                <Setter Property="Template">
+                                                    <Setter.Value>
+                                                        <ControlTemplate TargetType="ListBoxItem">
+                                                            <Border x:Name="Bd" Background="Transparent"
+                                                                    Padding="{TemplateBinding Padding}"
+                                                                    CornerRadius="3">
+                                                                <ContentPresenter/>
+                                                            </Border>
+                                                            <ControlTemplate.Triggers>
+                                                                <Trigger Property="IsMouseOver" Value="True">
+                                                                    <Setter TargetName="Bd" Property="Background" Value="#2e2e33"/>
+                                                                </Trigger>
+                                                                <Trigger Property="IsSelected" Value="True">
+                                                                    <Setter TargetName="Bd" Property="Background" Value="{StaticResource Accent}"/>
+                                                                    <Setter Property="Foreground" Value="White"/>
+                                                                </Trigger>
+                                                            </ControlTemplate.Triggers>
+                                                        </ControlTemplate>
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </Style>
+                                        </ListBox.ItemContainerStyle>
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding}"
+                                                           FontFamily="Cascadia Mono, Consolas"
+                                                           FontSize="12"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Border>
+                            </Popup>
+
+                            <!-- Hover tooltip for @refs -->
+                            <Popup x:Name="MentionTooltipPopup"
+                                   PlacementTarget="{Binding ElementName=PromptBox}"
+                                   Placement="Relative"
+                                   AllowsTransparency="True" StaysOpen="True"
+                                   Focusable="False" IsHitTestVisible="False">
+                                <Border Background="{StaticResource BgSurface}"
+                                        BorderBrush="{StaticResource Border1}" BorderThickness="1"
+                                        CornerRadius="3" Padding="8,4">
+                                    <TextBlock x:Name="MentionTooltipText"
+                                               Foreground="{StaticResource FgPrimary}"
+                                               FontFamily="Cascadia Mono, Consolas" FontSize="11"/>
+                                </Border>
+                            </Popup>
+                        </Grid>
                 </Border>
             </DockPanel>
 
