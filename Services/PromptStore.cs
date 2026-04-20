@@ -1,6 +1,5 @@
 using System.IO;
 using System.Windows.Threading;
-using Looper.Models;
 
 namespace Looper.Services;
 
@@ -8,11 +7,13 @@ public sealed class PromptStore
 {
     private readonly DispatcherTimer _debounce;
     private string _pendingPrompt = "";
-    private LoopSettings _settings;
+    private readonly string _looperDir;
+    private readonly string _promptFile;
 
-    public PromptStore(LoopSettings settings)
+    public PromptStore(string looperDir, string promptFile)
     {
-        _settings = settings;
+        _looperDir = looperDir;
+        _promptFile = promptFile;
         _debounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
         _debounce.Tick += (_, _) =>
         {
@@ -21,15 +22,11 @@ public sealed class PromptStore
         };
     }
 
-    public void UpdateSettings(LoopSettings settings) => _settings = settings;
-
     public string LoadPrompt()
     {
         try
         {
-            return File.Exists(_settings.PromptFile)
-                ? File.ReadAllText(_settings.PromptFile)
-                : "";
+            return File.Exists(_promptFile) ? File.ReadAllText(_promptFile) : "";
         }
         catch { return ""; }
     }
@@ -54,10 +51,10 @@ public sealed class PromptStore
     {
         try
         {
-            Directory.CreateDirectory(_settings.LooperDir);
-            var tmp = _settings.PromptFile + ".tmp";
+            Directory.CreateDirectory(_looperDir);
+            var tmp = _promptFile + ".tmp";
             File.WriteAllText(tmp, text);
-            File.Move(tmp, _settings.PromptFile, overwrite: true);
+            File.Move(tmp, _promptFile, overwrite: true);
         }
         catch { }
     }

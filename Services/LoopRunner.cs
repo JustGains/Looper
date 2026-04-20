@@ -44,7 +44,7 @@ public sealed class LoopRunner
             Output?.Invoke(this, chunk);
     }
 
-    public async Task RunAsync(Func<string> promptProvider, LoopSettings settings)
+    public async Task RunAsync(Func<string> promptProvider, LoopSettings settings, string workingDirectory)
     {
         if (IsRunning) return;
 
@@ -59,11 +59,12 @@ public sealed class LoopRunner
 
         try
         {
+            int effectiveMax = settings.RalphEnabled ? Math.Max(1, settings.MaxIterations) : 1;
             int iter = 1;
-            while (iter <= settings.MaxIterations && !cts.IsCancellationRequested)
+            while (iter <= effectiveMax && !cts.IsCancellationRequested)
             {
                 var currentPrompt = promptProvider();
-                var wrapped = BuildWrappedPrompt(currentPrompt, settings.MaxIterations);
+                var wrapped = BuildWrappedPrompt(currentPrompt, effectiveMax);
 
                 _formatter = settings.Tool == CliTool.ClaudeCode ? new StreamJsonFormatter() : null;
                 if (_formatter != null)
@@ -71,7 +72,7 @@ public sealed class LoopRunner
                     _formatter.SessionIdCaptured += (_, sid) => _capturedSessionId = sid;
                 }
 
-                IterationChanged?.Invoke(this, (iter, settings.MaxIterations));
+                IterationChanged?.Invoke(this, (iter, effectiveMax));
                 PromptInjected?.Invoke(this, currentPrompt);
                 Output?.Invoke(this, $"\n── iteration {iter}/{settings.MaxIterations} ──\n");
                 Status?.Invoke(this, "Running");
@@ -82,7 +83,7 @@ public sealed class LoopRunner
                 var continueSession = settings.KeepContext && iter > 1;
                 try
                 {
-                    exitCode = await _runner.RunAsync(settings, wrapped, continueSession, _capturedSessionId, cts.Token);
+                    exitCode = await _runner.RunAsync(settings, workingDirectory, wrapped, continueSession, _capturedSessionId, cts.Token);
                 }
                 finally
                 {
@@ -102,7 +103,7 @@ public sealed class LoopRunner
                     continue;
                 }
 
-                Output?.Invoke(this, $"[looper] iteration {iter} exited with code {exitCode}\n");
+                Output?.Invoke(this, $"[looper] iteration {iter}/{effectiveMax} exited with code {exitCode}\n");
                 iter++;
             }
 

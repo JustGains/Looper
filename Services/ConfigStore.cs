@@ -37,6 +37,8 @@ public sealed class ConfigStore
                     else
                         MergeMissingDefaults(cfg.StylingRules);
                     foreach (var r in cfg.StylingRules) r.Compile();
+
+                    MigrateLegacyProjectFields(cfg);
                     return cfg;
                 }
             }
@@ -48,9 +50,53 @@ public sealed class ConfigStore
         return fresh;
     }
 
-    /// Inject any default rule whose Name isn't already in the list,
-    /// preserving user-customised rules and their order. New defaults are
-    /// prepended so they take priority on tie-matches.
+    public void Save(LoopSettings s)
+    {
+        try
+        {
+            var dir = System.IO.Path.GetDirectoryName(Path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(Path, JsonSerializer.Serialize(s, JsonOpts));
+        }
+        catch { }
+    }
+
+    /// Push to RecentWorkingDirectories (folder-picker history only).
+    public void PushRecent(LoopSettings s, string dir)
+    {
+        if (string.IsNullOrWhiteSpace(dir)) return;
+        var normalized = Normalize(dir);
+        s.RecentWorkingDirectories.RemoveAll(d =>
+            string.Equals(Normalize(d), normalized, StringComparison.OrdinalIgnoreCase));
+        s.RecentWorkingDirectories.Insert(0, normalized);
+        while (s.RecentWorkingDirectories.Count > MaxRecent)
+            s.RecentWorkingDirectories.RemoveAt(s.RecentWorkingDirectories.Count - 1);
+    }
+
+    /// Append to OpenProjects without duplicates.
+    public void AddOpenProject(LoopSettings s, string dir)
+    {
+        if (string.IsNullOrWhiteSpace(dir)) return;
+        var normalized = Normalize(dir);
+        if (s.OpenProjects.Any(d => string.Equals(Normalize(d), normalized, StringComparison.OrdinalIgnoreCase)))
+            return;
+        s.OpenProjects.Add(normalized);
+    }
+
+    public void RemoveOpenProject(LoopSettings s, string dir)
+    {
+        if (string.IsNullOrWhiteSpace(dir)) return;
+        var normalized = Normalize(dir);
+        s.OpenProjects.RemoveAll(d =>
+            string.Equals(Normalize(d), normalized, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public static string Normalize(string p)
+    {
+        try { return System.IO.Path.GetFullPath(p).TrimEnd('\\', '/'); }
+        catch { return p.TrimEnd('\\', '/'); }
+    }
+
     private static void MergeMissingDefaults(List<StylingRule> existing)
     {
         var defaults = StylingDefaults.BuildDefaults();
@@ -65,32 +111,25 @@ public sealed class ConfigStore
         }
     }
 
-    public void Save(LoopSettings s)
+    private static void MigrateLegacyProjectFields(LoopSettings cfg)
     {
-        try
+        // If OpenProjects is empty but we have legacy hints, seed them.
+        if (cfg.OpenProjects.Count == 0)
         {
-            var dir = System.IO.Path.GetDirectoryName(Path);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            File.WriteAllText(Path, JsonSerializer.Serialize(s, JsonOpts));
+            var candidates = new[] { cfg.LastWorkingDirectory, cfg.WorkingDirectory }
+                .Concat(cfg.RecentWorkingDirectories);
+            foreach (var c in candidates)
+            {
+                if (string.IsNullOrWhiteSpace(c)) continue;
+                try { if (Directory.Exists(c)) { cfg.OpenProjects.Add(Normalize(c)); break; } }
+                catch { }
+            }
         }
-        catch { }
-    }
+        if (string.IsNullOrWhiteSpace(cfg.ActiveProject))
+            cfg.ActiveProject = cfg.OpenProjects.FirstOrDefault();
 
-    public void PushRecent(LoopSettings s, string dir)
-    {
-        if (string.IsNullOrWhiteSpace(dir)) return;
-        var normalized = System.IO.Path.GetFullPath(dir).TrimEnd('\\', '/');
-        s.RecentWorkingDirectories.RemoveAll(d =>
-            string.Equals(SafeNormalize(d), normalized, StringComparison.OrdinalIgnoreCase));
-        s.RecentWorkingDirectories.Insert(0, normalized);
-        while (s.RecentWorkingDirectories.Count > MaxRecent)
-            s.RecentWorkingDirectories.RemoveAt(s.RecentWorkingDirectories.Count - 1);
-        s.LastWorkingDirectory = normalized;
-    }
-
-    private static string SafeNormalize(string p)
-    {
-        try { return System.IO.Path.GetFullPath(p).TrimEnd('\\', '/'); }
-        catch { return p; }
+        // Clear legacy fields so they don't re-serialize.
+        cfg.LastWorkingDirectory = null;
+        cfg.WorkingDirectory = null;
     }
 }

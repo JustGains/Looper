@@ -1,4 +1,3 @@
-using System.IO;
 using System.Text.Json.Serialization;
 using Looper.Services;
 
@@ -12,14 +11,11 @@ public enum CliTool
 
 public sealed class LoopSettings
 {
-    // Transient: the current working directory. Also saved under LastWorkingDirectory.
-    [JsonIgnore]
-    public string WorkingDirectory { get; set; } = "";
-
     // Engine
     public CliTool Tool { get; set; } = CliTool.ClaudeCode;
     public int TimeoutSeconds { get; set; } = 120;
     public int MaxIterations { get; set; } = 5;
+    public bool RalphEnabled { get; set; } = true;
     public string? ClaudeModel { get; set; }
     public string? ClaudeEffort { get; set; }
     public string? CodexModel { get; set; }
@@ -39,15 +35,17 @@ public sealed class LoopSettings
     public double? WindowWidth { get; set; }
     public double? WindowHeight { get; set; }
 
-    // Dir history
-    public List<string> RecentWorkingDirectories { get; set; } = new();
-    public string? LastWorkingDirectory { get; set; }
+    // Projects (tabs)
+    public List<string> OpenProjects { get; set; } = new();
+    public string? ActiveProject { get; set; }
 
-    // Styling rules (also shown in the same config file)
+    // Folder-picker history (unrelated to OpenProjects)
+    public List<string> RecentWorkingDirectories { get; set; } = new();
+
+    // Styling rules for the streaming console
     public List<StylingRule> StylingRules { get; set; } = new();
 
-    // Derived paths (per-working-dir runtime files)
-    [JsonIgnore] public string LooperDir => Path.Combine(WorkingDirectory, ".looper");
-    [JsonIgnore] public string PromptFile => Path.Combine(LooperDir, "prompt.txt");
-    [JsonIgnore] public string TasksFile => Path.Combine(LooperDir, "tasks.md");
+    // Legacy migration — read once from old config, never written.
+    [JsonInclude] public string? LastWorkingDirectory { get; set; }
+    [JsonInclude] public string? WorkingDirectory { get; set; }
 }

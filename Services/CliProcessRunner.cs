@@ -13,10 +13,9 @@ public sealed class CliProcessRunner
     private Process? _process;
     private readonly object _lock = new();
 
-    public async Task<int> RunAsync(LoopSettings settings, string prompt, bool continueSession, string? sessionId, CancellationToken ct)
+    public async Task<int> RunAsync(LoopSettings settings, string workingDirectory, string prompt, bool continueSession, string? sessionId, CancellationToken ct)
     {
         var (fileName, args) = BuildCommand(settings, continueSession, sessionId);
-        var workingDirectory = settings.WorkingDirectory;
         var resolved = ResolveExecutable(fileName);
         if (resolved == null)
         {

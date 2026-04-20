@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -23,25 +24,23 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        _vm = new MainViewModel(Directory.GetCurrentDirectory());
+        _vm = new MainViewModel();
         DataContext = _vm;
 
         RestoreWindowBounds();
 
-        _vm.ConsoleAppend += (_, chunk) =>
-        {
-            AppendStyled(chunk);
-            if (AutoScrollBox.IsChecked == true)
-                ConsoleBox.ScrollToEnd();
-        };
-
         _vm.PropertyChanged += OnVmPropertyChanged;
-        _vm.WorkingDirectoryChanged += (_, _) => ConsolePara.Inlines.Clear();
-
-        TasksTabs.SelectionChanged += (_, _) => QueueScrollTasks();
+        _vm.Projects.CollectionChanged += OnProjectsCollectionChanged;
 
         ConsoleBox.SizeChanged += (_, _) => ApplyWordWrap();
-        Loaded += (_, _) => ApplyWordWrap();
+        Loaded += (_, _) =>
+        {
+            _vm.InitializeTabs(Directory.GetCurrentDirectory());
+            // Hook any projects created during Initialize
+            foreach (var p in _vm.Projects) HookProject(p);
+            AttachSelectedProjectDocument();
+            ApplyWordWrap();
+        };
 
         Closing += (_, _) => _vm.SaveWindowBounds(Left, Top, Width, Height);
         Closed += (_, _) => _vm.Shutdown();
@@ -53,21 +52,86 @@ public partial class MainWindow : Window
         TryEnableImmersiveDarkMode();
     }
 
+    private void OnProjectsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.NewItems != null)
+            foreach (ProjectViewModel p in e.NewItems) HookProject(p);
+        if (e.OldItems != null)
+            foreach (ProjectViewModel p in e.OldItems) UnhookProject(p);
+    }
+
+    private void HookProject(ProjectViewModel p)
+    {
+        p.ConsoleAppend -= OnProjectConsoleAppend;
+        p.ConsoleAppend += OnProjectConsoleAppend;
+    }
+
+    private void UnhookProject(ProjectViewModel p)
+    {
+        p.ConsoleAppend -= OnProjectConsoleAppend;
+    }
+
+    private void OnProjectConsoleAppend(object? sender, string chunk)
+    {
+        if (sender is not ProjectViewModel p) return;
+        AppendStyled(p, chunk);
+        if (ReferenceEquals(p, _vm.SelectedProject)
+            && _vm.AutoScrollConsole)
+        {
+            ConsoleBox.ScrollToEnd();
+        }
+    }
+
     private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(MainViewModel.WordWrapConsole))
             ApplyWordWrap();
-        else if (e.PropertyName == nameof(MainViewModel.TasksText)
-              || e.PropertyName == nameof(MainViewModel.AutoScrollTasks))
+        else if (e.PropertyName == nameof(MainViewModel.SelectedProject))
+        {
+            AttachSelectedProjectDocument();
+            ApplyWordWrap();
             QueueScrollTasks();
+        }
+        else if (e.PropertyName == nameof(MainViewModel.AutoScrollTasks))
+            QueueScrollTasks();
+    }
+
+    private void AttachSelectedProjectDocument()
+    {
+        var p = _vm.SelectedProject;
+        if (p == null)
+        {
+            ConsoleBox.Document = new FlowDocument();
+            return;
+        }
+        if (!ReferenceEquals(ConsoleBox.Document, p.ConsoleDocument))
+            ConsoleBox.Document = p.ConsoleDocument;
     }
 
     private void QueueScrollTasks()
     {
-        // Defer to Background priority so MarkdownViewer finishes re-rendering
-        // before we measure/scroll.
         Dispatcher.BeginInvoke(new Action(MaybeScrollTasks),
             System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    private void MaybeScrollTasks()
+    {
+        if (!_vm.AutoScrollTasks) return;
+        if (TasksTabs == null) return;
+        if (TasksTabs.SelectedIndex == 0)
+        {
+            TasksBox?.ScrollToEnd();
+            return;
+        }
+        var fdsv = FindVisualChild<FlowDocumentScrollViewer>(TasksMarkdown);
+        if (fdsv != null)
+        {
+            fdsv.ApplyTemplate();
+            var sv = FindVisualChild<ScrollViewer>(fdsv);
+            if (sv != null) { sv.ScrollToEnd(); return; }
+        }
+        var direct = FindVisualChild<ScrollViewer>(TasksMarkdown);
+        direct?.ScrollToEnd();
     }
 
     private void ApplyWordWrap()
@@ -102,7 +166,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void AppendStyled(string chunk)
+    private void AppendStyled(ProjectViewModel p, string chunk)
     {
         foreach (var (text, rule) in Tokenize(ApplyCollapse(chunk)))
         {
@@ -112,12 +176,10 @@ public partial class MainWindow : Window
             if (rule?.WeightValue is { } w) run.FontWeight = w;
             if (rule?.StyleValue is { } fs) run.FontStyle = fs;
             if (rule?.Underline == true) run.TextDecorations = TextDecorations.Underline;
-            ConsolePara.Inlines.Add(run);
+            p.ConsoleParagraph.Inlines.Add(run);
         }
     }
 
-    /// When CollapseToolCalls is on: shorten long tool-call headers and
-    /// replace tool result bodies with a single-glyph placeholder.
     private string ApplyCollapse(string chunk)
     {
         if (!_vm.CollapseToolCalls || string.IsNullOrEmpty(chunk)) return chunk;
@@ -172,15 +234,13 @@ public partial class MainWindow : Window
             startIdx = segEnd;
             if (originalSeg.Length == 0) break;
 
-            // --- Phase 1: replacement rules transform segment; collect hard ranges ---
             var (segment, hard) = ApplyReplacements(originalSeg, rules);
 
-            // --- Phase 2: collect styling matches on transformed segment ---
             var styleSpans = new List<(int start, int len, StylingRule rule, int idx)>();
             for (int i = 0; i < rules.Count; i++)
             {
                 var r = rules[i];
-                if (r.Replacement != null) continue; // those became hard ranges
+                if (r.Replacement != null) continue;
                 if (r.CompiledRegex is null) continue;
                 foreach (Match m in r.CompiledRegex.Matches(segment))
                 {
@@ -203,7 +263,6 @@ public partial class MainWindow : Window
                 sCursor = s.start + s.len;
             }
 
-            // --- Phase 3: emit, splitting style spans around hard ranges ---
             int pos = 0;
             int hIdx = 0;
             int stIdx = 0;
@@ -240,10 +299,6 @@ public partial class MainWindow : Window
         }
     }
 
-    /// Apply rules with a Replacement as a text transformation. Returns the
-    /// new segment and a list of (start, len, rule) ranges where replacements
-    /// landed (in the transformed segment's coordinates) so the styling pass
-    /// can respect them as hard, priority regions.
     private static (string segment, List<(int start, int len, StylingRule rule)> hard)
         ApplyReplacements(string seg, IList<StylingRule> rules)
     {
@@ -286,43 +341,33 @@ public partial class MainWindow : Window
         return (sb.ToString(), hard);
     }
 
-    private void BrowseWorkDir_Click(object sender, RoutedEventArgs e)
+    // ---------- commands ----------
+
+    private void AddProject_Click(object sender, RoutedEventArgs e)
     {
         var dlg = new OpenFolderDialog
         {
-            Title = "Select working directory",
-            InitialDirectory = _vm.WorkingDirectory,
+            Title = "Add project — select working directory",
+            InitialDirectory = _vm.SelectedProject?.WorkingDirectory ?? Directory.GetCurrentDirectory(),
         };
         if (dlg.ShowDialog(this) == true)
-        {
-            _vm.WorkingDirectoryInput = dlg.FolderName;
-            _vm.CommitWorkingDirectoryNow();
-        }
+            _vm.AddProject(dlg.FolderName);
     }
 
-    private void WorkDirBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void CloseTab_Click(object sender, RoutedEventArgs e)
     {
-        if (WorkDirBox.SelectedItem is string path && !string.IsNullOrWhiteSpace(path))
-        {
-            _vm.WorkingDirectoryInput = path;
-            _vm.CommitWorkingDirectoryNow();
-        }
-    }
-
-    private void WorkDirBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
-    {
-        if (e.Key == System.Windows.Input.Key.Enter)
-        {
-            _vm.CommitWorkingDirectoryNow();
-            e.Handled = true;
-        }
+        if (sender is Button b && b.Tag is ProjectViewModel p)
+            _vm.CloseProject(p);
+        e.Handled = true;
     }
 
     private async void StartStop_Click(object sender, RoutedEventArgs e)
     {
+        var p = _vm.SelectedProject;
+        if (p == null) return;
         try
         {
-            await _vm.ToggleStartStopAsync();
+            await p.ToggleStartStopAsync();
         }
         catch (Exception ex)
         {
@@ -330,58 +375,36 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ClearConsole_Click(object sender, RoutedEventArgs e) => ConsolePara.Inlines.Clear();
+    private void ClearConsole_Click(object sender, RoutedEventArgs e)
+    {
+        _vm.SelectedProject?.ConsoleParagraph.Inlines.Clear();
+    }
 
     private void OpenConfig_Click(object sender, RoutedEventArgs e) => _vm.OpenConfigInNotepad();
 
-    private void MaybeScrollTasks()
-    {
-        if (!_vm.AutoScrollTasks) return;
-        if (TasksTabs.SelectedIndex == 0)
-        {
-            TasksBox.ScrollToEnd();
-            return;
-        }
-        // Markdown tab: MarkdownViewer wraps a FlowDocumentScrollViewer which
-        // itself contains a ScrollViewer in its template.
-        var fdsv = FindVisualChild<FlowDocumentScrollViewer>(TasksMarkdown);
-        if (fdsv != null)
-        {
-            fdsv.ApplyTemplate();
-            var sv = FindVisualChild<ScrollViewer>(fdsv);
-            if (sv != null)
-            {
-                sv.ScrollToEnd();
-                return;
-            }
-        }
-        var direct = FindVisualChild<ScrollViewer>(TasksMarkdown);
-        direct?.ScrollToEnd();
-    }
-
-    private static T? FindVisualChild<T>(DependencyObject? parent) where T : DependencyObject
-    {
-        if (parent == null) return null;
-        for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
-        {
-            var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
-            if (child is T t) return t;
-            var r = FindVisualChild<T>(child);
-            if (r != null) return r;
-        }
-        return null;
-    }
-
     private void MaxIterUp_Click(object sender, RoutedEventArgs e)
     {
-        MaxIterBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        MaxIterBox?.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
         _vm.MaxIterations = Math.Min(999, _vm.MaxIterations + 1);
     }
 
     private void MaxIterDown_Click(object sender, RoutedEventArgs e)
     {
-        MaxIterBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        MaxIterBox?.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
         _vm.MaxIterations = Math.Max(1, _vm.MaxIterations - 1);
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject? parent) where T : DependencyObject
+    {
+        if (parent == null) return null;
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T t) return t;
+            var r = FindVisualChild<T>(child);
+            if (r != null) return r;
+        }
+        return null;
     }
 
     // ---- Immersive dark mode (title bar) ----

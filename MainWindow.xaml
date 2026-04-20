@@ -6,7 +6,8 @@
         xmlns:local="clr-namespace:Looper"
         xmlns:md="clr-namespace:Markdig.Wpf;assembly=Markdig.Wpf"
         mc:Ignorable="d"
-        Title="Looper" Height="820" Width="1360"
+        Title="{Binding SelectedProject.WorkingDirectory, StringFormat='Looper — {0}', FallbackValue='Looper', TargetNullValue='Looper'}"
+        Height="820" Width="1360"
         Icon="pack://application:,,,/app.ico"
         FontFamily="Segoe UI" FontSize="12" Background="#1e1e1e" Foreground="#eaeaea"
         TextOptions.TextFormattingMode="Ideal" UseLayoutRounding="True">
@@ -589,14 +590,15 @@
 
     <Grid Margin="10">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="6"/>
-            <RowDefinition Height="260"/>
+            <RowDefinition Height="Auto"/>   <!-- toolbar -->
+            <RowDefinition Height="Auto"/>   <!-- project tab strip -->
+            <RowDefinition Height="*"/>      <!-- prompt + tasks -->
+            <RowDefinition Height="6"/>      <!-- splitter -->
+            <RowDefinition Height="260"/>    <!-- console -->
         </Grid.RowDefinitions>
 
         <!-- ================= TOOLBAR ================= -->
-        <Border Grid.Row="0" Background="{StaticResource BgToolbar}"
+        <Border Grid.Row="1" Background="{StaticResource BgToolbar}"
                 BorderBrush="{StaticResource Border1}" BorderThickness="1"
                 CornerRadius="6" Padding="10,8" Margin="0,0,0,10">
             <DockPanel LastChildFill="True">
@@ -610,21 +612,6 @@
                 </Button>
 
                 <WrapPanel Orientation="Horizontal" ItemHeight="32">
-                <!-- working dir -->
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
-                    <Label Content="WORKING DIR"/>
-                    <ComboBox x:Name="WorkDirBox" Width="320" Margin="0,0,4,0"
-                              Style="{StaticResource EditableComboBox}"
-                              ItemsSource="{Binding RecentWorkingDirectories}"
-                              Text="{Binding WorkingDirectoryInput, UpdateSourceTrigger=PropertyChanged}"
-                              SelectionChanged="WorkDirBox_SelectionChanged"
-                              KeyDown="WorkDirBox_KeyDown"
-                              ToolTip="Recent working directories. Type a path (debounced) or pick from the list."/>
-                    <Button Content="Browse…" Style="{StaticResource FlatButton}" Click="BrowseWorkDir_Click"/>
-                </StackPanel>
-
-                <Border Style="{StaticResource ToolbarDivider}"/>
-
                 <!-- tool -->
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
                     <Label Content="TOOL"/>
@@ -656,10 +643,14 @@
 
                 <!-- numerics (timeout moved to console header) -->
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
+                    <CheckBox Content="Ralph" Margin="0,0,10,0"
+                              VerticalAlignment="Center"
+                              IsChecked="{Binding RalphEnabled}"
+                              ToolTip="When off, each Start does exactly one pass (no looping). Max Iter is ignored."/>
                     <Label Content="MAX ITER"/>
                     <Border BorderBrush="{StaticResource Border1}" BorderThickness="1"
                             CornerRadius="4" Background="{StaticResource BgInput}"
-                            Height="26">
+                            Height="26" IsEnabled="{Binding RalphEnabled}">
                         <StackPanel Orientation="Horizontal">
                             <RepeatButton Style="{StaticResource StepperButton}"
                                           Click="MaxIterDown_Click" Content="−"/>
@@ -683,8 +674,148 @@
             </DockPanel>
         </Border>
 
+        <!-- ================= PROJECT TAB STRIP ================= -->
+        <Border Grid.Row="0" BorderBrush="{StaticResource Border1}"
+                BorderThickness="0,0,0,1" Margin="0,0,0,6">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                <StackPanel Orientation="Horizontal">
+                    <ListBox x:Name="ProjectTabs"
+                             ItemsSource="{Binding Projects}"
+                             SelectedItem="{Binding SelectedProject, Mode=TwoWay}"
+                             Background="Transparent" BorderThickness="0" Padding="0"
+                             HorizontalAlignment="Left"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                        <ListBox.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal"/>
+                            </ItemsPanelTemplate>
+                        </ListBox.ItemsPanel>
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="0"/>
+                                <Setter Property="Margin" Value="0,0,1,-1"/>
+                                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                                <Setter Property="MinWidth" Value="120"/>
+                                <Setter Property="Height" Value="30"/>
+                                <Setter Property="SnapsToDevicePixels" Value="True"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Grid SnapsToDevicePixels="True">
+                                                <Border x:Name="Bd"
+                                                        Background="#232326"
+                                                        BorderBrush="#1d1d20"
+                                                        BorderThickness="0,0,1,0"
+                                                        CornerRadius="6,6,0,0"/>
+                                                <Border x:Name="Accent"
+                                                        Background="Transparent"
+                                                        BorderBrush="Transparent"
+                                                        BorderThickness="0,2,0,0"
+                                                        CornerRadius="6,6,0,0"/>
+                                                <ContentPresenter x:Name="CP"
+                                                                  VerticalAlignment="Center"
+                                                                  Margin="14,0,8,0"
+                                                                  TextElement.Foreground="{StaticResource FgMuted}"/>
+                                            </Grid>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Bd" Property="Background" Value="#2a2a2e"/>
+                                                    <Setter TargetName="CP" Property="TextElement.Foreground" Value="{StaticResource FgPrimary}"/>
+                                                </Trigger>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="Bd" Property="Background" Value="{StaticResource BgToolbar}"/>
+                                                    <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Border1}"/>
+                                                    <Setter TargetName="Bd" Property="BorderThickness" Value="1,1,1,0"/>
+                                                    <Setter TargetName="Accent" Property="BorderBrush" Value="{StaticResource FgAccent}"/>
+                                                    <Setter TargetName="CP" Property="TextElement.Foreground" Value="{StaticResource FgPrimary}"/>
+                                                    <Setter Property="Panel.ZIndex" Value="1"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid VerticalAlignment="Center" ToolTip="{Binding HeaderTooltip}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Ellipse Grid.Column="0" Width="8" Height="8" Fill="#6a9955" Margin="0,0,7,0"
+                                             VerticalAlignment="Center"
+                                             Visibility="{Binding IsRunning, Converter={StaticResource BoolToVis}}"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding HeaderLabel}"
+                                               VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"
+                                               MaxWidth="180"/>
+                                    <Button Grid.Column="2" Margin="10,0,-4,0" Width="18" Height="18"
+                                            Padding="0"
+                                            Background="Transparent" BorderThickness="0"
+                                            Cursor="Hand" FontSize="13"
+                                            Tag="{Binding}"
+                                            Click="CloseTab_Click"
+                                            ToolTip="Close project"
+                                            IsEnabled="{Binding DataContext.CanCloseAny, RelativeSource={RelativeSource AncestorType=Window}}">
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border x:Name="XBd" Background="Transparent"
+                                                        CornerRadius="3" Width="18" Height="18">
+                                                    <TextBlock Text="✕" FontSize="10"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                               Foreground="{StaticResource FgDim}"
+                                                               x:Name="XGlyph"/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="XBd" Property="Background" Value="#5a2020"/>
+                                                        <Setter TargetName="XGlyph" Property="Foreground" Value="#ffcccc"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsEnabled" Value="False">
+                                                        <Setter Property="Opacity" Value="0.25"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Button.Template>
+                                    </Button>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <Button x:Name="AddProjectButton" Click="AddProject_Click"
+                            ToolTip="Add project (pick a working directory)"
+                            Background="Transparent" BorderThickness="0"
+                            Cursor="Hand" Padding="10,0" Margin="4,0,0,0"
+                            VerticalAlignment="Center" Height="30"
+                            Foreground="{StaticResource FgMuted}"
+                            FocusVisualStyle="{x:Null}">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="AddBd" Background="Transparent"
+                                        CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                    <TextBlock Text="+" FontSize="18" FontWeight="SemiBold"
+                                               VerticalAlignment="Center" HorizontalAlignment="Center"
+                                               Foreground="{TemplateBinding Foreground}"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="AddBd" Property="Background" Value="#2a2a2e"/>
+                                        <Setter Property="Foreground" Value="{StaticResource FgPrimary}"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
         <!-- ================= PROMPT + TASKS ================= -->
-        <Grid Grid.Row="1">
+        <Grid Grid.Row="2" DataContext="{Binding SelectedProject}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="6"/>
@@ -732,12 +863,13 @@
                                        Text="{Binding TasksFile}"/>
                         </StackPanel>
                         <CheckBox DockPanel.Dock="Right" VerticalAlignment="Center"
-                                  IsChecked="{Binding AutoScrollTasks}" Content="Auto-scroll"/>
+                                  IsChecked="{Binding DataContext.AutoScrollTasks, RelativeSource={RelativeSource AncestorType=Window}}"
+                                  Content="Auto-scroll"/>
                     </DockPanel>
                 </Border>
                 <Border Style="{StaticResource PaneFrame}">
                     <TabControl x:Name="TasksTabs" Background="Transparent"
-                                SelectedIndex="{Binding TasksTabIndex}">
+                                SelectedIndex="{Binding DataContext.TasksTabIndex, RelativeSource={RelativeSource AncestorType=Window}}">
                         <TabItem Header="Raw">
                             <TextBox x:Name="TasksBox"
                                      Text="{Binding TasksText, UpdateSourceTrigger=PropertyChanged}"
@@ -757,10 +889,10 @@
             </DockPanel>
         </Grid>
 
-        <GridSplitter Grid.Row="2" Height="6" HorizontalAlignment="Stretch" Background="{StaticResource Border1}"/>
+        <GridSplitter Grid.Row="3" Height="6" HorizontalAlignment="Stretch" Background="{StaticResource Border1}"/>
 
         <!-- ================= CONSOLE ================= -->
-        <DockPanel Grid.Row="3">
+        <DockPanel Grid.Row="4" DataContext="{Binding SelectedProject}">
             <Border DockPanel.Dock="Top" Style="{StaticResource PaneHeaderBar}">
                 <DockPanel LastChildFill="True">
                     <!-- iteration / status / start-stop pinned to the right -->
@@ -808,7 +940,7 @@
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
                         <Label Content="TIMEOUT"/>
                         <TextBox Width="52" Margin="0,0,10,0"
-                                 Text="{Binding TimeoutSeconds, UpdateSourceTrigger=LostFocus}"
+                                 Text="{Binding DataContext.TimeoutSeconds, RelativeSource={RelativeSource AncestorType=Window}, UpdateSourceTrigger=LostFocus}"
                                  VerticalContentAlignment="Center" HorizontalContentAlignment="Center"/>
                         <Label Content="ITER"/>
                         <TextBlock Text="{Binding IterationElapsedText}"
@@ -825,11 +957,12 @@
 
                     <!-- display toggles -->
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
-                        <CheckBox IsChecked="{Binding WordWrapConsole}"
+                        <CheckBox IsChecked="{Binding DataContext.WordWrapConsole, RelativeSource={RelativeSource AncestorType=Window}}"
                                   VerticalAlignment="Center" Margin="0,0,10,0" Content="Wrap"/>
-                        <CheckBox IsChecked="{Binding CollapseToolCalls}"
+                        <CheckBox IsChecked="{Binding DataContext.CollapseToolCalls, RelativeSource={RelativeSource AncestorType=Window}}"
                                   VerticalAlignment="Center" Margin="0,0,10,0" Content="Collapse tools"/>
-                        <CheckBox x:Name="AutoScrollBox" IsChecked="{Binding AutoScrollConsole}"
+                        <CheckBox x:Name="AutoScrollBox"
+                                  IsChecked="{Binding DataContext.AutoScrollConsole, RelativeSource={RelativeSource AncestorType=Window}}"
                                   VerticalAlignment="Center" Margin="0,0,10,0" Content="Auto-scroll"/>
                         <Button Content="Clear" Style="{StaticResource FlatButton}"
                                 Click="ClearConsole_Click" MinWidth="60"/>
@@ -845,11 +978,7 @@
                              BorderThickness="0" Background="Transparent"
                              FontFamily="Cascadia Mono, Consolas" FontSize="12"
                              Foreground="#d4d4d4" Padding="10,8"
-                             Block.LineHeight="16">
-                    <FlowDocument PageWidth="5000">
-                        <Paragraph x:Name="ConsolePara" Margin="0" TextIndent="0"/>
-                    </FlowDocument>
-                </RichTextBox>
+                             Block.LineHeight="16"/>
             </Border>
         </DockPanel>
     </Grid>
