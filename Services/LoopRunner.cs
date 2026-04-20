@@ -44,7 +44,7 @@ public sealed class LoopRunner
             Output?.Invoke(this, chunk);
     }
 
-    public async Task RunAsync(Func<string> promptProvider, LoopSettings settings, string workingDirectory)
+    public async Task RunAsync(Func<string> promptProvider, ConversationSettings settings, string workingDirectory)
     {
         if (IsRunning) return;
 

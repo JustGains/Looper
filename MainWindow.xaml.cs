@@ -1,4 +1,3 @@
-using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -17,6 +16,7 @@ namespace Looper;
 public partial class MainWindow : Window
 {
     private readonly MainViewModel _vm;
+    private ProjectViewModel? _subscribedProject;
 
     private static readonly Regex ToolHeaderLine = new(@"^▸\s.+?\(", RegexOptions.Compiled);
     private static readonly Regex ToolResultLine = new(@"^⎿\s", RegexOptions.Compiled);
@@ -30,15 +30,17 @@ public partial class MainWindow : Window
         RestoreWindowBounds();
 
         _vm.PropertyChanged += OnVmPropertyChanged;
-        _vm.Projects.CollectionChanged += OnProjectsCollectionChanged;
+        _vm.ProjectAdded += (_, p) => HookProject(p);
+        _vm.ProjectRemoved += (_, p) => UnhookProject(p);
 
         ConsoleBox.SizeChanged += (_, _) => ApplyWordWrap();
+
         Loaded += (_, _) =>
         {
             _vm.InitializeTabs(Directory.GetCurrentDirectory());
-            // Hook any projects created during Initialize
             foreach (var p in _vm.Projects) HookProject(p);
-            AttachSelectedProjectDocument();
+            SubscribeToSelectedProject();
+            AttachSelectedConversationDocument();
             ApplyWordWrap();
         };
 
@@ -52,60 +54,97 @@ public partial class MainWindow : Window
         TryEnableImmersiveDarkMode();
     }
 
-    private void OnProjectsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        if (e.NewItems != null)
-            foreach (ProjectViewModel p in e.NewItems) HookProject(p);
-        if (e.OldItems != null)
-            foreach (ProjectViewModel p in e.OldItems) UnhookProject(p);
-    }
+    // ---- hooking projects and their conversations ----
 
     private void HookProject(ProjectViewModel p)
     {
-        p.ConsoleAppend -= OnProjectConsoleAppend;
-        p.ConsoleAppend += OnProjectConsoleAppend;
+        p.ConversationAdded -= OnConversationAdded;
+        p.ConversationAdded += OnConversationAdded;
+        p.ConversationRemoved -= OnConversationRemoved;
+        p.ConversationRemoved += OnConversationRemoved;
+        foreach (var c in p.Conversations) HookConversation(c);
     }
 
     private void UnhookProject(ProjectViewModel p)
     {
-        p.ConsoleAppend -= OnProjectConsoleAppend;
+        p.ConversationAdded -= OnConversationAdded;
+        p.ConversationRemoved -= OnConversationRemoved;
+        foreach (var c in p.Conversations) UnhookConversation(c);
     }
 
-    private void OnProjectConsoleAppend(object? sender, string chunk)
+    private void OnConversationAdded(object? sender, ConversationViewModel c) => HookConversation(c);
+    private void OnConversationRemoved(object? sender, ConversationViewModel c) => UnhookConversation(c);
+
+    private void HookConversation(ConversationViewModel c)
     {
-        if (sender is not ProjectViewModel p) return;
-        AppendStyled(p, chunk);
-        if (ReferenceEquals(p, _vm.SelectedProject)
+        c.ConsoleAppend -= OnConversationConsoleAppend;
+        c.ConsoleAppend += OnConversationConsoleAppend;
+    }
+
+    private void UnhookConversation(ConversationViewModel c) =>
+        c.ConsoleAppend -= OnConversationConsoleAppend;
+
+    private void OnConversationConsoleAppend(object? sender, string chunk)
+    {
+        if (sender is not ConversationViewModel c) return;
+        AppendStyled(c, chunk);
+        if (ReferenceEquals(c, _vm.SelectedProject?.SelectedConversation)
             && _vm.AutoScrollConsole)
         {
             ConsoleBox.ScrollToEnd();
         }
     }
 
+    // ---- selection changes ----
+
     private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MainViewModel.WordWrapConsole))
-            ApplyWordWrap();
-        else if (e.PropertyName == nameof(MainViewModel.SelectedProject))
+        if (e.PropertyName == nameof(MainViewModel.SelectedProject))
         {
-            AttachSelectedProjectDocument();
+            SubscribeToSelectedProject();
+            AttachSelectedConversationDocument();
             ApplyWordWrap();
             QueueScrollTasks();
         }
+        else if (e.PropertyName == nameof(MainViewModel.WordWrapConsole))
+        {
+            ApplyWordWrap();
+        }
         else if (e.PropertyName == nameof(MainViewModel.AutoScrollTasks))
+        {
             QueueScrollTasks();
+        }
     }
 
-    private void AttachSelectedProjectDocument()
+    private void SubscribeToSelectedProject()
     {
-        var p = _vm.SelectedProject;
-        if (p == null)
+        if (_subscribedProject != null)
+            _subscribedProject.PropertyChanged -= OnProjectPropertyChanged;
+        _subscribedProject = _vm.SelectedProject;
+        if (_subscribedProject != null)
+            _subscribedProject.PropertyChanged += OnProjectPropertyChanged;
+    }
+
+    private void OnProjectPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ProjectViewModel.SelectedConversation))
+        {
+            AttachSelectedConversationDocument();
+            ApplyWordWrap();
+            QueueScrollTasks();
+        }
+    }
+
+    private void AttachSelectedConversationDocument()
+    {
+        var c = _vm.SelectedProject?.SelectedConversation;
+        if (c == null)
         {
             ConsoleBox.Document = new FlowDocument();
             return;
         }
-        if (!ReferenceEquals(ConsoleBox.Document, p.ConsoleDocument))
-            ConsoleBox.Document = p.ConsoleDocument;
+        if (!ReferenceEquals(ConsoleBox.Document, c.ConsoleDocument))
+            ConsoleBox.Document = c.ConsoleDocument;
     }
 
     private void QueueScrollTasks()
@@ -166,7 +205,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void AppendStyled(ProjectViewModel p, string chunk)
+    private void AppendStyled(ConversationViewModel c, string chunk)
     {
         foreach (var (text, rule) in Tokenize(ApplyCollapse(chunk)))
         {
@@ -176,7 +215,7 @@ public partial class MainWindow : Window
             if (rule?.WeightValue is { } w) run.FontWeight = w;
             if (rule?.StyleValue is { } fs) run.FontStyle = fs;
             if (rule?.Underline == true) run.TextDecorations = TextDecorations.Underline;
-            p.ConsoleParagraph.Inlines.Add(run);
+            c.ConsoleParagraph.Inlines.Add(run);
         }
     }
 
@@ -361,13 +400,28 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+    private void AddConversation_Click(object sender, RoutedEventArgs e)
+    {
+        _vm.SelectedProject?.AddConversation();
+    }
+
+    private void RemoveConversation_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button b && b.Tag is ConversationViewModel c)
+        {
+            var project = _vm.Projects.FirstOrDefault(p => p.Conversations.Contains(c));
+            project?.RemoveConversation(c);
+        }
+        e.Handled = true;
+    }
+
     private async void StartStop_Click(object sender, RoutedEventArgs e)
     {
-        var p = _vm.SelectedProject;
-        if (p == null) return;
+        var c = _vm.SelectedProject?.SelectedConversation;
+        if (c == null) return;
         try
         {
-            await p.ToggleStartStopAsync();
+            await c.ToggleStartStopAsync();
         }
         catch (Exception ex)
         {
@@ -377,21 +431,25 @@ public partial class MainWindow : Window
 
     private void ClearConsole_Click(object sender, RoutedEventArgs e)
     {
-        _vm.SelectedProject?.ConsoleParagraph.Inlines.Clear();
+        _vm.SelectedProject?.SelectedConversation?.ConsoleParagraph.Inlines.Clear();
     }
 
     private void OpenConfig_Click(object sender, RoutedEventArgs e) => _vm.OpenConfigInNotepad();
 
     private void MaxIterUp_Click(object sender, RoutedEventArgs e)
     {
+        var c = _vm.SelectedProject?.SelectedConversation;
+        if (c == null) return;
         MaxIterBox?.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
-        _vm.MaxIterations = Math.Min(999, _vm.MaxIterations + 1);
+        c.MaxIterations = Math.Min(999, c.MaxIterations + 1);
     }
 
     private void MaxIterDown_Click(object sender, RoutedEventArgs e)
     {
+        var c = _vm.SelectedProject?.SelectedConversation;
+        if (c == null) return;
         MaxIterBox?.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
-        _vm.MaxIterations = Math.Max(1, _vm.MaxIterations - 1);
+        c.MaxIterations = Math.Max(1, c.MaxIterations - 1);
     }
 
     private static T? FindVisualChild<T>(DependencyObject? parent) where T : DependencyObject

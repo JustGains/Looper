@@ -1,9 +1,8 @@
+using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
-using System.Windows;
-using System.Windows.Documents;
-using System.Windows.Threading;
 using Looper.Models;
 using Looper.Services;
 
@@ -12,23 +11,13 @@ namespace Looper.ViewModels;
 public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
 {
     public event PropertyChangedEventHandler? PropertyChanged;
-    public event EventHandler<string>? ConsoleAppend;
+    public event EventHandler<ConversationViewModel>? ConversationAdded;
+    public event EventHandler<ConversationViewModel>? ConversationRemoved;
 
-    private readonly LoopSettings _shellSettings;
-    private readonly PromptStore _promptStore;
-    private readonly TasksFileService _tasksFile;
-    private readonly LoopRunner _loopRunner;
-    private readonly DispatcherTimer _tasksSaveDebounce;
-    private readonly DispatcherTimer _uiTick;
-    private DateTime? _iterStartUtc;
-    private DateTime? _totalStartUtc;
-    private bool _suppressTasksSave;
-    private string? _promptAtLastInjection;
+    private readonly LoopSettings _shellDefaults;
+    private ProjectConfig _projectConfig;
 
     public string WorkingDirectory { get; }
-    public string LooperDir => Path.Combine(WorkingDirectory, ".looper");
-    public string PromptFile => Path.Combine(LooperDir, "prompt.txt");
-    public string TasksFile => Path.Combine(LooperDir, "tasks.md");
 
     public string HeaderLabel
     {
@@ -41,217 +30,147 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
     }
     public string HeaderTooltip => WorkingDirectory;
 
-    public FlowDocument ConsoleDocument { get; }
-    public Paragraph ConsoleParagraph { get; }
+    public ObservableCollection<ConversationViewModel> Conversations { get; } = new();
 
-    private string _prompt = "";
-    public string Prompt
+    private ConversationViewModel? _selectedConversation;
+    public ConversationViewModel? SelectedConversation
     {
-        get => _prompt;
+        get => _selectedConversation;
         set
         {
-            if (_prompt == value) return;
-            _prompt = value;
-            _promptStore.SavePromptDebounced(value);
+            if (ReferenceEquals(_selectedConversation, value)) return;
+            _selectedConversation = value;
+            _projectConfig.LastConversationId = value?.Id;
+            SaveProjectConfig();
             OnChanged();
-            if (IsRunning && _promptAtLastInjection is not null && value != _promptAtLastInjection)
-                PromptPendingChange = true;
+            OnChanged(nameof(IsRunning));
         }
     }
 
-    private bool _promptPendingChange;
-    public bool PromptPendingChange
-    {
-        get => _promptPendingChange;
-        private set { if (_promptPendingChange != value) { _promptPendingChange = value; OnChanged(); } }
-    }
+    /// True if any conversation is running. Used for the project tab header indicator.
+    public bool IsRunning => Conversations.Any(c => c.IsRunning);
 
-    private string _tasksText = "";
-    public string TasksText
-    {
-        get => _tasksText;
-        set
-        {
-            if (_tasksText == value) return;
-            _tasksText = value;
-            OnChanged();
-            if (!_suppressTasksSave)
-            {
-                _tasksSaveDebounce.Stop();
-                _tasksSaveDebounce.Start();
-            }
-        }
-    }
-
-    private int _currentIteration;
-    public int CurrentIteration
-    {
-        get => _currentIteration;
-        private set { if (_currentIteration != value) { _currentIteration = value; OnChanged(); OnChanged(nameof(IterationLabel)); } }
-    }
-
-    public string IterationLabel =>
-        $"Iteration: {CurrentIteration} / {(_shellSettings.RalphEnabled ? _shellSettings.MaxIterations : 1)}";
-    public string IterationElapsedText => FormatElapsed(_iterStartUtc);
-    public string TotalElapsedText => FormatElapsed(_totalStartUtc);
-
-    private string _status = "Idle";
-    public string Status
-    {
-        get => _status;
-        private set { if (_status != value) { _status = value; OnChanged(); } }
-    }
-
-    private bool _isRunning;
-    public bool IsRunning
-    {
-        get => _isRunning;
-        private set
-        {
-            if (_isRunning == value) return;
-            _isRunning = value;
-            OnChanged();
-            OnChanged(nameof(StartStopText));
-        }
-    }
-
-    public string StartStopText => IsRunning ? "Stop" : "Start";
-
-    public ProjectViewModel(string workingDirectory, LoopSettings shellSettings)
+    public ProjectViewModel(string workingDirectory, LoopSettings shellDefaults)
     {
         WorkingDirectory = ConfigStore.Normalize(workingDirectory);
-        _shellSettings = shellSettings;
+        _shellDefaults = shellDefaults;
 
-        ConsoleParagraph = new Paragraph { Margin = new Thickness(0), TextIndent = 0 };
-        ConsoleDocument = new FlowDocument(ConsoleParagraph)
+        // Migration from legacy per-dir files (if they exist).
+        ConversationStore.MigrateLegacyIfNeeded(WorkingDirectory, shellDefaults);
+
+        _projectConfig = ConversationStore.LoadProject(WorkingDirectory);
+
+        // Load conversations
+        var foundIds = ConversationStore.EnumerateConversationIds(WorkingDirectory);
+
+        // Determine order: ConversationOrder first (if still present), then any stragglers
+        var orderedIds = _projectConfig.ConversationOrder
+            .Where(id => foundIds.Contains(id, StringComparer.OrdinalIgnoreCase))
+            .Concat(foundIds.Where(id => !_projectConfig.ConversationOrder.Contains(id, StringComparer.OrdinalIgnoreCase)))
+            .ToList();
+
+        if (orderedIds.Count == 0)
         {
-            PageWidth = 6000,
-            Background = System.Windows.Media.Brushes.Transparent,
+            // Seed a brand-new default conversation
+            var cfg = ConversationStore.SeedFromDefaults(ConversationStore.NewId(), "Default", shellDefaults);
+            ConversationStore.SaveConversation(WorkingDirectory, cfg);
+            orderedIds.Add(cfg.Id);
+        }
+
+        foreach (var id in orderedIds)
+            Conversations.Add(BuildConversationVM(id));
+
+        // Wire collection-level running state signal
+        foreach (var c in Conversations) c.PropertyChanged += OnConvPropertyChanged;
+        Conversations.CollectionChanged += (_, e) =>
+        {
+            if (e.NewItems != null)
+                foreach (ConversationViewModel c in e.NewItems) c.PropertyChanged += OnConvPropertyChanged;
+            if (e.OldItems != null)
+                foreach (ConversationViewModel c in e.OldItems) c.PropertyChanged -= OnConvPropertyChanged;
         };
 
-        _promptStore = new PromptStore(LooperDir, PromptFile);
-        _tasksFile = new TasksFileService();
+        // Pick the last-used conversation if possible
+        _selectedConversation = Conversations.FirstOrDefault(c =>
+            string.Equals(c.Id, _projectConfig.LastConversationId, StringComparison.OrdinalIgnoreCase))
+            ?? Conversations.FirstOrDefault();
 
-        _tasksSaveDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-        _tasksSaveDebounce.Tick += (_, _) =>
-        {
-            _tasksSaveDebounce.Stop();
-            _tasksFile.Save(_tasksText);
-        };
-
-        _tasksFile.ExternalChange += (_, text) =>
-            Application.Current?.Dispatcher.BeginInvoke(() => ApplyExternalTasks(text));
-
-        _uiTick = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-        _uiTick.Tick += (_, _) =>
-        {
-            OnChanged(nameof(IterationElapsedText));
-            OnChanged(nameof(TotalElapsedText));
-        };
-
-        _loopRunner = new LoopRunner(new CliProcessRunner());
-        _loopRunner.Output += (_, chunk) =>
-            Application.Current?.Dispatcher.BeginInvoke(() => ConsoleAppend?.Invoke(this, chunk));
-        _loopRunner.Status += (_, s) => Application.Current?.Dispatcher.BeginInvoke(() =>
-        {
-            Status = s;
-            IsRunning = s is "Running" or "Restarting" or "Killing";
-            if (!IsRunning)
-            {
-                _uiTick.Stop();
-                OnChanged(nameof(IterationElapsedText));
-                OnChanged(nameof(TotalElapsedText));
-            }
-        });
-        _loopRunner.IterationChanged += (_, t) => Application.Current?.Dispatcher.BeginInvoke(() =>
-        {
-            CurrentIteration = t.current;
-            _iterStartUtc = DateTime.UtcNow;
-            OnChanged(nameof(IterationElapsedText));
-        });
-        _loopRunner.PromptInjected += (_, p) => Application.Current?.Dispatcher.BeginInvoke(() =>
-        {
-            _promptAtLastInjection = p;
-            PromptPendingChange = false;
-        });
-
-        _prompt = _promptStore.LoadPrompt();
-        _tasksFile.Watch(TasksFile);
-        _tasksText = _tasksFile.Load();
+        // Persist the cleaned order
+        _projectConfig.ConversationOrder = Conversations.Select(c => c.Id).ToList();
+        _projectConfig.LastConversationId = _selectedConversation?.Id;
+        SaveProjectConfig();
     }
 
-    private void ApplyExternalTasks(string text)
+    private void OnConvPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (_tasksText == text) return;
-        _suppressTasksSave = true;
-        try { TasksText = text; }
-        finally { _suppressTasksSave = false; }
+        if (e.PropertyName == nameof(ConversationViewModel.IsRunning))
+            OnChanged(nameof(IsRunning));
     }
 
-    public async Task ToggleStartStopAsync()
+    private ConversationViewModel BuildConversationVM(string id)
     {
-        if (IsRunning)
-        {
-            _loopRunner.Stop();
-            return;
-        }
-        _promptStore.FlushPrompt();
-        _promptAtLastInjection = null;
-        PromptPendingChange = false;
-        IsRunning = true;
-        Status = "Running";
-        CurrentIteration = 0;
-        _totalStartUtc = DateTime.UtcNow;
-        _iterStartUtc = DateTime.UtcNow;
-        _uiTick.Start();
-        OnChanged(nameof(TotalElapsedText));
-        OnChanged(nameof(IterationElapsedText));
-        OnChanged(nameof(IterationLabel));
-        try
-        {
-            await _loopRunner.RunAsync(() => _prompt, _shellSettings, WorkingDirectory);
-        }
-        finally
-        {
-            IsRunning = false;
-            _uiTick.Stop();
-            _promptAtLastInjection = null;
-            PromptPendingChange = false;
-            OnChanged(nameof(TotalElapsedText));
-            OnChanged(nameof(IterationElapsedText));
-        }
+        var cfg = ConversationStore.LoadConversation(WorkingDirectory, id);
+        // Ensure settings file exists on disk (fresh project writes defaults).
+        if (!File.Exists(ConversationStore.ConversationSettingsFile(WorkingDirectory, id)))
+            ConversationStore.SaveConversation(WorkingDirectory, cfg);
+
+        var vm = new ConversationViewModel(WorkingDirectory, cfg,
+            persistSettings: () => ConversationStore.SaveConversation(WorkingDirectory, cfg));
+        return vm;
     }
 
-    public void NotifyMaxIterChanged() => OnChanged(nameof(IterationLabel));
-
-    public void StopIfRunning()
+    public ConversationViewModel AddConversation()
     {
-        if (IsRunning) _loopRunner.Stop();
+        var existingNames = Conversations.Select(c => c.Name).ToList();
+        var name = ConversationStore.SuggestName(WorkingDirectory, existingNames);
+        var cfg = ConversationStore.SeedFromDefaults(ConversationStore.NewId(), name, _shellDefaults);
+        ConversationStore.SaveConversation(WorkingDirectory, cfg);
+
+        var vm = new ConversationViewModel(WorkingDirectory, cfg,
+            persistSettings: () => ConversationStore.SaveConversation(WorkingDirectory, cfg));
+        Conversations.Add(vm);
+        ConversationAdded?.Invoke(this, vm);
+
+        _projectConfig.ConversationOrder = Conversations.Select(c => c.Id).ToList();
+        SaveProjectConfig();
+
+        SelectedConversation = vm;
+        return vm;
     }
+
+    public void RemoveConversation(ConversationViewModel vm)
+    {
+        if (vm == null || !Conversations.Contains(vm)) return;
+        if (Conversations.Count <= 1) return; // keep at least one
+
+        var wasSelected = ReferenceEquals(SelectedConversation, vm);
+        var idx = Conversations.IndexOf(vm);
+        vm.Shutdown();
+        Conversations.Remove(vm);
+        ConversationRemoved?.Invoke(this, vm);
+        ConversationStore.DeleteConversation(WorkingDirectory, vm.Id);
+        vm.Dispose();
+
+        _projectConfig.ConversationOrder = Conversations.Select(c => c.Id).ToList();
+        if (wasSelected)
+            SelectedConversation = Conversations[Math.Max(0, Math.Min(idx - 1, Conversations.Count - 1))];
+        SaveProjectConfig();
+    }
+
+    public bool CanRemoveSelected => Conversations.Count > 1;
+
+    private void SaveProjectConfig() =>
+        ConversationStore.SaveProject(WorkingDirectory, _projectConfig);
 
     public void Shutdown()
     {
-        _loopRunner.Stop();
-        _promptStore.FlushPrompt();
-        if (_tasksSaveDebounce.IsEnabled)
-        {
-            _tasksSaveDebounce.Stop();
-            _tasksFile.Save(_tasksText);
-        }
-        _tasksFile.Dispose();
+        foreach (var c in Conversations.ToList()) c.Shutdown();
+        _projectConfig.LastConversationId = SelectedConversation?.Id;
+        _projectConfig.ConversationOrder = Conversations.Select(c => c.Id).ToList();
+        SaveProjectConfig();
     }
 
     public void Dispose() => Shutdown();
-
-    private static string FormatElapsed(DateTime? startUtc)
-    {
-        if (startUtc is null) return "--:--";
-        var t = DateTime.UtcNow - startUtc.Value;
-        if (t < TimeSpan.Zero) t = TimeSpan.Zero;
-        return t.TotalHours >= 1
-            ? $"{(int)t.TotalHours}:{t.Minutes:D2}:{t.Seconds:D2}"
-            : $"{t.Minutes:D2}:{t.Seconds:D2}";
-    }
 
     private void OnChanged([CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

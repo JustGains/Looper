@@ -13,7 +13,7 @@ public sealed class CliProcessRunner
     private Process? _process;
     private readonly object _lock = new();
 
-    public async Task<int> RunAsync(LoopSettings settings, string workingDirectory, string prompt, bool continueSession, string? sessionId, CancellationToken ct)
+    public async Task<int> RunAsync(ConversationSettings settings, string workingDirectory, string prompt, bool continueSession, string? sessionId, CancellationToken ct)
     {
         var (fileName, args) = BuildCommand(settings, continueSession, sessionId);
         var resolved = ResolveExecutable(fileName);
@@ -128,7 +128,7 @@ public sealed class CliProcessRunner
         return null;
     }
 
-    private static (string fileName, string[] args) BuildCommand(LoopSettings s, bool continueSession, string? sessionId)
+    private static (string fileName, string[] args) BuildCommand(ConversationSettings s, bool continueSession, string? sessionId)
     {
         switch (s.Tool)
         {
