@@ -9,6 +9,7 @@ public sealed class StylingRule
 {
     public string Name { get; set; } = "";
     public string Pattern { get; set; } = "";
+    public string? Replacement { get; set; }
     public string? Foreground { get; set; }
     public string? Background { get; set; }
     public string? FontWeight { get; set; }
@@ -64,6 +65,16 @@ public static class StylingDefaults
 {
     public static List<StylingRule> BuildDefaults() => new()
     {
+        // --- emoji / icon replacements (first so they win ties) ---
+        new StylingRule { Name = "mcp android tool",
+            Pattern = @"mcp__android-mcp__[A-Za-z0-9_-]+",
+            Replacement = "🤖 android",
+            Foreground = "#a4c639", FontWeight = "SemiBold" },
+        new StylingRule { Name = "mcp generic tool",
+            Pattern = @"mcp__([a-z0-9][a-z0-9-]*)__([A-Za-z0-9_-]+)",
+            Replacement = "🧩 $1:$2",
+            Foreground = "#b5c6e6" },
+
         new StylingRule { Name = "iteration separator",
             Pattern = @"^── iteration \d+/\d+ ──$",
             Foreground = "#c586c0", FontWeight = "Bold" },

@@ -34,6 +34,8 @@ public sealed class ConfigStore
                 {
                     if (cfg.StylingRules.Count == 0)
                         cfg.StylingRules = StylingDefaults.BuildDefaults();
+                    else
+                        MergeMissingDefaults(cfg.StylingRules);
                     foreach (var r in cfg.StylingRules) r.Compile();
                     return cfg;
                 }
@@ -44,6 +46,23 @@ public sealed class ConfigStore
         var fresh = new LoopSettings { StylingRules = StylingDefaults.BuildDefaults() };
         foreach (var r in fresh.StylingRules) r.Compile();
         return fresh;
+    }
+
+    /// Inject any default rule whose Name isn't already in the list,
+    /// preserving user-customised rules and their order. New defaults are
+    /// prepended so they take priority on tie-matches.
+    private static void MergeMissingDefaults(List<StylingRule> existing)
+    {
+        var defaults = StylingDefaults.BuildDefaults();
+        var haveNames = new HashSet<string>(
+            existing.Select(r => r.Name ?? ""),
+            StringComparer.OrdinalIgnoreCase);
+        int insertAt = 0;
+        foreach (var d in defaults)
+        {
+            if (haveNames.Contains(d.Name)) continue;
+            existing.Insert(insertAt++, d);
+        }
     }
 
     public void Save(LoopSettings s)

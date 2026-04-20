@@ -169,22 +169,33 @@ public sealed class CliProcessRunner
                 var a = new List<string> { "exec" };
                 if (continueSession)
                 {
+                    // `codex exec resume` only accepts a subset of `codex exec` flags.
+                    // --color / -m / -c are NOT valid here; the resumed session
+                    // inherits its model/effort from creation time.
                     a.Add("resume");
-                    a.Add("--last");
+                    a.Add("--dangerously-bypass-approvals-and-sandbox");
+                    a.Add("--skip-git-repo-check");
+                    if (!string.IsNullOrEmpty(sessionId))
+                        a.Add(sessionId);
+                    else
+                        a.Add("--last");
                 }
-                a.Add("--dangerously-bypass-approvals-and-sandbox");
-                a.Add("--skip-git-repo-check");
-                a.Add("--color");
-                a.Add("never");
-                if (!string.IsNullOrWhiteSpace(s.CodexModel))
+                else
                 {
-                    a.Add("-m");
-                    a.Add(s.CodexModel);
-                }
-                if (!string.IsNullOrWhiteSpace(s.CodexEffort))
-                {
-                    a.Add("-c");
-                    a.Add($"model_reasoning_effort=\"{s.CodexEffort}\"");
+                    a.Add("--dangerously-bypass-approvals-and-sandbox");
+                    a.Add("--skip-git-repo-check");
+                    a.Add("--color");
+                    a.Add("never");
+                    if (!string.IsNullOrWhiteSpace(s.CodexModel))
+                    {
+                        a.Add("-m");
+                        a.Add(s.CodexModel);
+                    }
+                    if (!string.IsNullOrWhiteSpace(s.CodexEffort))
+                    {
+                        a.Add("-c");
+                        a.Add($"model_reasoning_effort=\"{s.CodexEffort}\"");
+                    }
                 }
                 a.Add("-");
                 return ("codex", a.ToArray());

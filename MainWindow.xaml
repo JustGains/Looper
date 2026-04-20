@@ -599,9 +599,19 @@
         <Border Grid.Row="0" Background="{StaticResource BgToolbar}"
                 BorderBrush="{StaticResource Border1}" BorderThickness="1"
                 CornerRadius="6" Padding="10,8" Margin="0,0,0,10">
-            <DockPanel LastChildFill="False">
+            <DockPanel LastChildFill="True">
+                <!-- Settings icon pinned to the right -->
+                <Button DockPanel.Dock="Right" Style="{StaticResource FlatButton}"
+                        MinWidth="38" Padding="8,5" VerticalAlignment="Top"
+                        Margin="6,0,0,0"
+                        Click="OpenConfig_Click"
+                        ToolTip="Open looper.conf in Notepad">
+                    <TextBlock Text="⚙" FontSize="15" VerticalAlignment="Center"/>
+                </Button>
+
+                <WrapPanel Orientation="Horizontal" ItemHeight="32">
                 <!-- working dir -->
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
                     <Label Content="WORKING DIR"/>
                     <ComboBox x:Name="WorkDirBox" Width="320" Margin="0,0,4,0"
                               Style="{StaticResource EditableComboBox}"
@@ -616,7 +626,7 @@
                 <Border Style="{StaticResource ToolbarDivider}"/>
 
                 <!-- tool -->
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
                     <Label Content="TOOL"/>
                     <ComboBox Width="130"
                               ItemsSource="{Binding ToolOptions}"
@@ -625,7 +635,7 @@
                 </StackPanel>
 
                 <!-- model -->
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
                     <Label Content="MODEL"/>
                     <ComboBox Width="180" Style="{StaticResource EditableComboBox}"
                               ItemsSource="{Binding ModelSuggestions}"
@@ -634,7 +644,7 @@
                 </StackPanel>
 
                 <!-- effort -->
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
                     <Label Content="EFFORT"/>
                     <ComboBox Width="110" Style="{StaticResource EditableComboBox}"
                               ItemsSource="{Binding EffortSuggestions}"
@@ -645,7 +655,7 @@
                 <Border Style="{StaticResource ToolbarDivider}"/>
 
                 <!-- numerics (timeout moved to console header) -->
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
                     <Label Content="MAX ITER"/>
                     <Border BorderBrush="{StaticResource Border1}" BorderThickness="1"
                             CornerRadius="4" Background="{StaticResource BgInput}"
@@ -664,18 +674,12 @@
                     </Border>
                 </StackPanel>
 
-                <CheckBox Margin="12,0,0,0" VerticalAlignment="Center"
+                <CheckBox Margin="4,0,8,0" VerticalAlignment="Center"
                           IsChecked="{Binding KeepContext}"
                           Content="Keep context"
-                          ToolTip="Subsequent iterations resume the previous CLI session (Claude: --continue, Codex: exec resume --last). Both tools auto-compact when context grows large."/>
+                          ToolTip="Subsequent iterations resume the previous CLI session (Claude: --resume / Codex: exec resume). Both tools auto-compact when context grows large."/>
 
-                <!-- Settings icon -->
-                <Button DockPanel.Dock="Right" Style="{StaticResource FlatButton}"
-                        MinWidth="38" Padding="8,5"
-                        Click="OpenConfig_Click"
-                        ToolTip="Open looper.conf in Notepad">
-                    <TextBlock Text="⚙" FontSize="15" VerticalAlignment="Center"/>
-                </Button>
+                </WrapPanel>
             </DockPanel>
         </Border>
 
@@ -758,8 +762,22 @@
         <!-- ================= CONSOLE ================= -->
         <DockPanel Grid.Row="3">
             <Border DockPanel.Dock="Top" Style="{StaticResource PaneHeaderBar}">
-                <DockPanel LastChildFill="False">
-                    <StackPanel Orientation="Horizontal">
+                <DockPanel LastChildFill="True">
+                    <!-- iteration / status / start-stop pinned to the right -->
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                                VerticalAlignment="Top" Margin="8,0,0,0">
+                        <TextBlock Text="{Binding IterationLabel}" Foreground="{StaticResource FgPrimary}"
+                                   FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <TextBlock Text="{Binding Status}" Foreground="{StaticResource FgAccent}"
+                                   VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <Button Style="{StaticResource PrimaryButton}"
+                                Content="{Binding StartStopText}" Click="StartStop_Click"
+                                Padding="14,4" MinWidth="80"/>
+                    </StackPanel>
+
+                    <WrapPanel Orientation="Horizontal" ItemHeight="28">
+                    <!-- title + spinner -->
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
                         <TextBlock Style="{StaticResource PaneHeader}" Text="STREAMING OUTPUT"/>
                         <Grid Style="{StaticResource Spinner}" Margin="8,0,0,0"
                               Visibility="{Binding IsRunning, Converter={StaticResource BoolToVis}}">
@@ -782,7 +800,12 @@
                                 </EventTrigger>
                             </Grid.Triggers>
                         </Grid>
-                        <Border Width="1" Background="{StaticResource Border1}" Margin="12,3"/>
+                    </StackPanel>
+
+                    <Border Width="1" Background="{StaticResource Border1}" Margin="0,3,8,3"/>
+
+                    <!-- timeout + elapsed timers -->
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
                         <Label Content="TIMEOUT"/>
                         <TextBox Width="52" Margin="0,0,10,0"
                                  Text="{Binding TimeoutSeconds, UpdateSourceTrigger=LostFocus}"
@@ -797,7 +820,11 @@
                                    Foreground="{StaticResource FgPrimary}"
                                    FontFamily="Cascadia Mono, Consolas" VerticalAlignment="Center"/>
                     </StackPanel>
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+
+                    <Border Width="1" Background="{StaticResource Border1}" Margin="0,3,8,3"/>
+
+                    <!-- display toggles -->
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
                         <CheckBox IsChecked="{Binding WordWrapConsole}"
                                   VerticalAlignment="Center" Margin="0,0,10,0" Content="Wrap"/>
                         <CheckBox IsChecked="{Binding CollapseToolCalls}"
@@ -805,16 +832,10 @@
                         <CheckBox x:Name="AutoScrollBox" IsChecked="{Binding AutoScrollConsole}"
                                   VerticalAlignment="Center" Margin="0,0,10,0" Content="Auto-scroll"/>
                         <Button Content="Clear" Style="{StaticResource FlatButton}"
-                                Click="ClearConsole_Click" MinWidth="60" Margin="0,0,12,0"/>
-                        <Border Width="1" Background="{StaticResource Border1}" Margin="0,3,12,3"/>
-                        <TextBlock Text="{Binding IterationLabel}" Foreground="{StaticResource FgPrimary}"
-                                   FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                        <TextBlock Text="{Binding Status}" Foreground="{StaticResource FgAccent}"
-                                   VerticalAlignment="Center" Margin="0,0,12,0"/>
-                        <Button Style="{StaticResource PrimaryButton}"
-                                Content="{Binding StartStopText}" Click="StartStop_Click"
-                                Padding="14,4" MinWidth="80"/>
+                                Click="ClearConsole_Click" MinWidth="60"/>
                     </StackPanel>
+
+                    </WrapPanel>
                 </DockPanel>
             </Border>
             <Border Style="{StaticResource PaneFrame}" Background="{StaticResource BgConsole}">

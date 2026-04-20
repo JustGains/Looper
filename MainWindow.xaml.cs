@@ -164,43 +164,126 @@ public partial class MainWindow : Window
         }
 
         var startIdx = 0;
-        while (startIdx <= chunk.Length)
+        while (startIdx < chunk.Length)
         {
             var nl = chunk.IndexOf('\n', startIdx);
             int segEnd = nl < 0 ? chunk.Length : nl + 1;
-            var segment = chunk.Substring(startIdx, segEnd - startIdx);
+            var originalSeg = chunk.Substring(startIdx, segEnd - startIdx);
             startIdx = segEnd;
-            if (segment.Length == 0) break;
+            if (originalSeg.Length == 0) break;
 
-            var spans = new List<(int start, int len, StylingRule rule)>();
-            foreach (var r in rules)
+            // --- Phase 1: replacement rules transform segment; collect hard ranges ---
+            var (segment, hard) = ApplyReplacements(originalSeg, rules);
+
+            // --- Phase 2: collect styling matches on transformed segment ---
+            var styleSpans = new List<(int start, int len, StylingRule rule, int idx)>();
+            for (int i = 0; i < rules.Count; i++)
             {
+                var r = rules[i];
+                if (r.Replacement != null) continue; // those became hard ranges
                 if (r.CompiledRegex is null) continue;
                 foreach (Match m in r.CompiledRegex.Matches(segment))
                 {
                     if (m.Length == 0) continue;
-                    spans.Add((m.Index, m.Length, r));
+                    styleSpans.Add((m.Index, m.Length, r, i));
                 }
             }
-            spans.Sort((a, b) => a.start != b.start ? a.start.CompareTo(b.start) : b.len.CompareTo(a.len));
-            var accepted = new List<(int start, int len, StylingRule rule)>();
-            int cursor = 0;
-            foreach (var s in spans)
+            styleSpans.Sort((a, b) =>
             {
-                if (s.start < cursor) continue;
-                accepted.Add(s);
-                cursor = s.start + s.len;
+                if (a.start != b.start) return a.start.CompareTo(b.start);
+                if (a.len != b.len) return b.len.CompareTo(a.len);
+                return a.idx.CompareTo(b.idx);
+            });
+            var acceptedStyle = new List<(int start, int len, StylingRule rule)>();
+            int sCursor = 0;
+            foreach (var s in styleSpans)
+            {
+                if (s.start < sCursor) continue;
+                acceptedStyle.Add((s.start, s.len, s.rule));
+                sCursor = s.start + s.len;
             }
 
+            // --- Phase 3: emit, splitting style spans around hard ranges ---
             int pos = 0;
-            foreach (var a in accepted)
+            int hIdx = 0;
+            int stIdx = 0;
+            while (pos < segment.Length)
             {
-                if (a.start > pos) yield return (segment.Substring(pos, a.start - pos), null);
-                yield return (segment.Substring(a.start, a.len), a.rule);
-                pos = a.start + a.len;
+                while (hIdx < hard.Count && hard[hIdx].start + hard[hIdx].len <= pos) hIdx++;
+                while (stIdx < acceptedStyle.Count && acceptedStyle[stIdx].start + acceptedStyle[stIdx].len <= pos) stIdx++;
+
+                if (hIdx < hard.Count && hard[hIdx].start == pos)
+                {
+                    var h = hard[hIdx];
+                    yield return (segment.Substring(h.start, h.len), h.rule);
+                    pos = h.start + h.len;
+                    continue;
+                }
+
+                int hardBoundary = hIdx < hard.Count ? hard[hIdx].start : segment.Length;
+
+                if (stIdx < acceptedStyle.Count && acceptedStyle[stIdx].start <= pos)
+                {
+                    var s = acceptedStyle[stIdx];
+                    int sEnd = Math.Min(s.start + s.len, hardBoundary);
+                    yield return (segment.Substring(pos, sEnd - pos), s.rule);
+                    pos = sEnd;
+                    continue;
+                }
+
+                int nextStyleStart = stIdx < acceptedStyle.Count ? acceptedStyle[stIdx].start : segment.Length;
+                int end = Math.Min(hardBoundary, nextStyleStart);
+                if (end <= pos) break;
+                yield return (segment.Substring(pos, end - pos), null);
+                pos = end;
             }
-            if (pos < segment.Length) yield return (segment.Substring(pos), null);
         }
+    }
+
+    /// Apply rules with a Replacement as a text transformation. Returns the
+    /// new segment and a list of (start, len, rule) ranges where replacements
+    /// landed (in the transformed segment's coordinates) so the styling pass
+    /// can respect them as hard, priority regions.
+    private static (string segment, List<(int start, int len, StylingRule rule)> hard)
+        ApplyReplacements(string seg, IList<StylingRule> rules)
+    {
+        var matches = new List<(Match m, StylingRule rule, int idx)>();
+        for (int i = 0; i < rules.Count; i++)
+        {
+            var r = rules[i];
+            if (r.Replacement == null || r.CompiledRegex == null) continue;
+            foreach (Match m in r.CompiledRegex.Matches(seg))
+            {
+                if (m.Length == 0) continue;
+                matches.Add((m, r, i));
+            }
+        }
+        if (matches.Count == 0) return (seg, new List<(int, int, StylingRule)>());
+
+        matches.Sort((a, b) =>
+        {
+            if (a.m.Index != b.m.Index) return a.m.Index.CompareTo(b.m.Index);
+            if (a.m.Length != b.m.Length) return b.m.Length.CompareTo(a.m.Length);
+            return a.idx.CompareTo(b.idx);
+        });
+
+        var sb = new System.Text.StringBuilder();
+        var hard = new List<(int, int, StylingRule)>();
+        int pos = 0;
+        int cursor = 0;
+        foreach (var mm in matches)
+        {
+            if (mm.m.Index < cursor) continue;
+            if (mm.m.Index > pos) sb.Append(seg, pos, mm.m.Index - pos);
+            var rep = mm.m.Result(mm.rule.Replacement!);
+            int newStart = sb.Length;
+            sb.Append(rep);
+            hard.Add((newStart, rep.Length, mm.rule));
+            pos = mm.m.Index + mm.m.Length;
+            cursor = pos;
+        }
+        if (pos < seg.Length) sb.Append(seg, pos, seg.Length - pos);
+        return (sb.ToString(), hard);
     }
 
     private void BrowseWorkDir_Click(object sender, RoutedEventArgs e)
