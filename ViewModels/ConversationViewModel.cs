@@ -362,15 +362,26 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     public int OpenTasks
     {
         get => _openTasks;
-        private set { if (_openTasks != value) { _openTasks = value; OnChanged(); OnChanged(nameof(TaskStatsVisible)); } }
+        private set { if (_openTasks != value) { _openTasks = value; OnChanged(); OnChanged(nameof(TaskStatsVisible)); OnChanged(nameof(TaskProgressPercent)); OnChanged(nameof(TaskTotal)); } }
     }
     private int _closedTasks;
     public int ClosedTasks
     {
         get => _closedTasks;
-        private set { if (_closedTasks != value) { _closedTasks = value; OnChanged(); OnChanged(nameof(TaskStatsVisible)); } }
+        private set { if (_closedTasks != value) { _closedTasks = value; OnChanged(); OnChanged(nameof(TaskStatsVisible)); OnChanged(nameof(TaskProgressPercent)); OnChanged(nameof(TaskTotal)); } }
     }
     public bool TaskStatsVisible => _openTasks + _closedTasks > 0;
+    public int TaskTotal => _openTasks + _closedTasks;
+    /// 0-100; used by the status bar mini progress bar. Returns 0 when no tasks
+    /// exist so the bar stays empty (the pill itself is hidden in that case).
+    public double TaskProgressPercent
+    {
+        get
+        {
+            var total = _openTasks + _closedTasks;
+            return total == 0 ? 0 : Math.Round(100.0 * _closedTasks / total, 1);
+        }
+    }
 
     public ObservableCollection<QueuedChatMessage> QueuedMessages { get; } = new();
 

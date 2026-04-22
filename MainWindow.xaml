@@ -89,6 +89,87 @@
             <SolidColorBrush x:Key="Danger" Color="#b03030"/>
             <SolidColorBrush x:Key="DangerHover" Color="#cc3838"/>
 
+            <!-- ========== Pill design system — restrained, Apple-adjacent ========== -->
+            <!-- Shared surface: barely lifted from toolbar, hairline border -->
+            <SolidColorBrush x:Key="PillSurface" Color="#1f1f23"/>
+            <SolidColorBrush x:Key="PillHairline" Color="#2c2c32"/>
+            <SolidColorBrush x:Key="PillLabelColor" Color="#7a7a82"/>
+
+            <!-- Status accents: single saturated color per state, flat (no gradients) -->
+            <SolidColorBrush x:Key="AccentEmerald" Color="#34d399"/>
+            <SolidColorBrush x:Key="AccentEmeraldDim" Color="#2a3b35"/>
+            <SolidColorBrush x:Key="AccentAmber" Color="#fbbf24"/>
+            <SolidColorBrush x:Key="AccentAmberDim" Color="#3b3422"/>
+            <SolidColorBrush x:Key="AccentRose" Color="#f87171"/>
+            <SolidColorBrush x:Key="AccentRoseDim" Color="#3b2428"/>
+
+            <!-- Progress track + fill for the TASKS pill -->
+            <SolidColorBrush x:Key="PillTrack" Color="#2a2a30"/>
+
+            <!-- Base pill: shared surface, hairline, generous radius, tight padding -->
+            <Style x:Key="StatusPill" TargetType="Border">
+                <Setter Property="Background" Value="{StaticResource PillSurface}"/>
+                <Setter Property="BorderBrush" Value="{StaticResource PillHairline}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="CornerRadius" Value="8"/>
+                <Setter Property="Padding" Value="10,5,10,5"/>
+                <Setter Property="Margin" Value="0,0,6,0"/>
+                <Setter Property="SnapsToDevicePixels" Value="True"/>
+                <Setter Property="VerticalAlignment" Value="Center"/>
+            </Style>
+            <!-- Status variants share the surface; only the content color differs -->
+            <Style x:Key="StatusPillOk" TargetType="Border" BasedOn="{StaticResource StatusPill}"/>
+            <Style x:Key="StatusPillWarn" TargetType="Border" BasedOn="{StaticResource StatusPill}"/>
+            <Style x:Key="StatusPillDanger" TargetType="Border" BasedOn="{StaticResource StatusPill}"/>
+
+            <!-- Typography — legible label (no small-caps — too small to read at a glance) -->
+            <Style x:Key="PillLabel" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="11"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+                <Setter Property="Foreground" Value="{StaticResource PillLabelColor}"/>
+                <Setter Property="VerticalAlignment" Value="Center"/>
+                <Setter Property="TextOptions.TextFormattingMode" Value="Ideal"/>
+            </Style>
+            <Style x:Key="PillNumber" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="13"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+                <Setter Property="VerticalAlignment" Value="Center"/>
+                <Setter Property="Typography.NumeralAlignment" Value="Tabular"/>
+                <Setter Property="TextOptions.TextFormattingMode" Value="Ideal"/>
+            </Style>
+            <Style x:Key="PillDot" TargetType="Ellipse">
+                <Setter Property="Width" Value="6"/>
+                <Setter Property="Height" Value="6"/>
+                <Setter Property="VerticalAlignment" Value="Center"/>
+                <Setter Property="Margin" Value="0,0,8,0"/>
+            </Style>
+
+            <!-- Thin 2px progress bar with fully-rounded caps (capsule style) -->
+            <Style x:Key="MiniProgressBar" TargetType="ProgressBar">
+                <Setter Property="Height" Value="3"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="Minimum" Value="0"/>
+                <Setter Property="Maximum" Value="100"/>
+                <Setter Property="Foreground" Value="{StaticResource AccentEmerald}"/>
+                <Setter Property="Background" Value="{StaticResource PillTrack}"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ProgressBar">
+                            <Border Background="{TemplateBinding Background}"
+                                    CornerRadius="1.5" ClipToBounds="True">
+                                <Grid>
+                                    <Rectangle Name="PART_Track"/>
+                                    <Rectangle Name="PART_Indicator"
+                                               HorizontalAlignment="Left"
+                                               Fill="{TemplateBinding Foreground}"
+                                               RadiusX="1.5" RadiusY="1.5"/>
+                                </Grid>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
             <!-- Flat button -->
             <Style x:Key="FlatButton" TargetType="Button">
                 <Setter Property="Background" Value="#3a3a3d"/>
@@ -1126,61 +1207,6 @@
                         </Border>
                     </DockPanel>
                 </Border>
-                <Border DockPanel.Dock="Bottom"
-                        Background="{StaticResource BgSurface}"
-                        BorderBrush="{StaticResource Border1}" BorderThickness="0,1,0,0"
-                        Padding="8">
-                    <DockPanel LastChildFill="True">
-                        <ItemsControl DockPanel.Dock="Top"
-                                      ItemsSource="{Binding QueuedMessages}"
-                                      Visibility="{Binding HasQueuedMessages, Converter={StaticResource BoolToVis}}"
-                                      Margin="0,0,0,6">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border Background="#2a2a2d"
-                                            BorderBrush="{StaticResource Border1}" BorderThickness="1"
-                                            CornerRadius="3" Padding="6,3" Margin="0,2,0,0">
-                                        <DockPanel LastChildFill="True">
-                                            <Button DockPanel.Dock="Right" Content="✕"
-                                                    Tag="{Binding}"
-                                                    Click="RemoveQueued_Click"
-                                                    Style="{StaticResource FlatButton}"
-                                                    MinWidth="0" Padding="6,0"
-                                                    ToolTip="Remove from queue"/>
-                                            <TextBlock Text="{Binding Text}"
-                                                       TextTrimming="CharacterEllipsis"
-                                                       VerticalAlignment="Center"
-                                                       Foreground="{StaticResource FgPrimary}"
-                                                       FontFamily="Cascadia Code, Cascadia Mono, Consolas"
-                                                       FontSize="12"/>
-                                        </DockPanel>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        <DockPanel LastChildFill="True">
-                            <Button DockPanel.Dock="Right" Content="Send"
-                                    Style="{StaticResource FlatButton}"
-                                    MinWidth="60" Margin="6,0,0,0"
-                                    Click="ChatSend_Click"/>
-                            <TextBox x:Name="ChatInputBox"
-                                     Text="{Binding ChatInput, UpdateSourceTrigger=PropertyChanged}"
-                                     AcceptsReturn="True" TextWrapping="Wrap"
-                                     MaxHeight="90" VerticalScrollBarVisibility="Auto"
-                                     TextChanged="ChatInputBox_TextChanged"
-                                     SelectionChanged="ChatInputBox_SelectionChanged"
-                                     PreviewKeyDown="ChatInputBox_PreviewKeyDown"
-                                     LostFocus="ChatInputBox_LostFocus"
-                                     MouseMove="ChatInputBox_MouseMove"
-                                     MouseLeave="ChatInputBox_MouseLeave"
-                                     Background="{StaticResource BgInput}"
-                                     Foreground="{StaticResource FgPrimary}"
-                                     BorderBrush="{StaticResource Border1}" BorderThickness="1"
-                                     FontFamily="Cascadia Code, Cascadia Mono, Consolas" FontSize="12"
-                                     Padding="8,6"/>
-                        </DockPanel>
-                    </DockPanel>
-                </Border>
                 <Border Style="{StaticResource PaneFrame}">
                     <Grid>
                             <TextBox x:Name="PromptBox"
@@ -1392,6 +1418,97 @@
                     </WrapPanel>
                 </DockPanel>
             </Border>
+            <!-- Chat/send bar — single unified input (no dual-box) -->
+            <DockPanel DockPanel.Dock="Bottom" LastChildFill="True" Margin="0,8,0,0">
+                <!-- Queue chips stacked above the input -->
+                <ItemsControl DockPanel.Dock="Top"
+                              ItemsSource="{Binding QueuedMessages}"
+                              Visibility="{Binding HasQueuedMessages, Converter={StaticResource BoolToVis}}"
+                              Margin="0,0,0,6">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="#22242a"
+                                    BorderBrush="{StaticResource Border2}" BorderThickness="1"
+                                    CornerRadius="5" Padding="8,4" Margin="0,0,0,4">
+                                <DockPanel LastChildFill="True">
+                                    <Button DockPanel.Dock="Right" Content="✕"
+                                            Tag="{Binding}" Click="RemoveQueued_Click"
+                                            Background="Transparent" BorderThickness="0"
+                                            Foreground="{StaticResource FgDim}" Cursor="Hand"
+                                            Padding="6,0" MinWidth="0"
+                                            ToolTip="Remove from queue"/>
+                                    <TextBlock Text="{Binding Text}"
+                                               TextTrimming="CharacterEllipsis"
+                                               VerticalAlignment="Center"
+                                               Foreground="{StaticResource FgPrimary}"
+                                               FontFamily="Cascadia Code, Cascadia Mono, Consolas"
+                                               FontSize="12"/>
+                                </DockPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- Single rounded input with inline Send -->
+                <Border Background="{StaticResource BgInput}"
+                        BorderBrush="{StaticResource Border1}" BorderThickness="1"
+                        CornerRadius="8">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Style.Triggers>
+                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                    <Setter Property="BorderBrush" Value="{StaticResource FgAccent}"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <DockPanel LastChildFill="True">
+                        <Button DockPanel.Dock="Right" Content="Send"
+                                Click="ChatSend_Click" Cursor="Hand"
+                                MinWidth="64" Margin="4" Padding="14,6"
+                                Foreground="White" FontWeight="SemiBold"
+                                BorderThickness="0">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="Bd" Background="{StaticResource Accent}"
+                                            CornerRadius="5" Padding="{TemplateBinding Padding}">
+                                        <ContentPresenter HorizontalAlignment="Center"
+                                                          VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Bd" Property="Background"
+                                                    Value="{StaticResource AccentHover}"/>
+                                        </Trigger>
+                                        <Trigger Property="IsPressed" Value="True">
+                                            <Setter TargetName="Bd" Property="Background"
+                                                    Value="{StaticResource Accent}"/>
+                                            <Setter TargetName="Bd" Property="Opacity" Value="0.85"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <TextBox x:Name="ChatInputBox"
+                                 Text="{Binding ChatInput, UpdateSourceTrigger=PropertyChanged}"
+                                 AcceptsReturn="True" TextWrapping="Wrap"
+                                 MaxHeight="90" VerticalScrollBarVisibility="Auto"
+                                 TextChanged="ChatInputBox_TextChanged"
+                                 SelectionChanged="ChatInputBox_SelectionChanged"
+                                 PreviewKeyDown="ChatInputBox_PreviewKeyDown"
+                                 LostFocus="ChatInputBox_LostFocus"
+                                 MouseMove="ChatInputBox_MouseMove"
+                                 MouseLeave="ChatInputBox_MouseLeave"
+                                 Background="Transparent"
+                                 Foreground="{StaticResource FgPrimary}"
+                                 CaretBrush="{StaticResource FgAccent}"
+                                 BorderThickness="0"
+                                 FontFamily="Cascadia Code, Cascadia Mono, Consolas" FontSize="13"
+                                 VerticalContentAlignment="Center"
+                                 Padding="12,8"/>
+                    </DockPanel>
+                </Border>
+            </DockPanel>
             <Border Style="{StaticResource PaneFrame}" Background="{StaticResource BgConsole}">
                 <RichTextBox x:Name="ConsoleBox"
                              IsReadOnly="True" IsDocumentEnabled="True"
@@ -1430,60 +1547,84 @@
                                TextTrimming="CharacterEllipsis" MaxWidth="360"/>
                 </StackPanel>
 
-                <!-- Loop-health pills: tasks, circuit state, exit status -->
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
-                    <Border Background="#183028" BorderBrush="#2f5849" BorderThickness="1"
-                            CornerRadius="3" Padding="6,2" Margin="0,0,6,0"
+                <!-- Loop-health pills -->
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+
+                    <!-- TASKS — numbers + label; 2px capsule bar below -->
+                    <Border Style="{StaticResource StatusPillOk}"
                             Visibility="{Binding TaskStatsVisible, Converter={StaticResource BoolToVis}}"
-                            ToolTip="Open and completed checkboxes in tasks.md">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="TASKS" Foreground="{StaticResource FgDim}"
-                                       FontSize="10" FontWeight="SemiBold"
-                                       VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <TextBlock Foreground="#8bd49e"
-                                       FontFamily="Cascadia Code, Cascadia Mono, Consolas" FontSize="11"
-                                       VerticalAlignment="Center">
-                                <Run Text="{Binding OpenTasks, Mode=OneWay}"/><Run Text=" open · "/><Run Text="{Binding ClosedTasks, Mode=OneWay}"/><Run Text=" done"/>
-                            </TextBlock>
-                        </StackPanel>
+                            ToolTip="Completed and remaining checkboxes in tasks.md">
+                        <Grid MinWidth="104">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <DockPanel Grid.Row="0" LastChildFill="False">
+                                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Style="{StaticResource PillNumber}"
+                                               Text="{Binding ClosedTasks, Mode=OneWay}"
+                                               Foreground="{StaticResource AccentEmerald}"/>
+                                    <TextBlock Style="{StaticResource PillNumber}"
+                                               Text="/"
+                                               Foreground="{StaticResource PillLabelColor}"
+                                               FontWeight="Normal"
+                                               Margin="2,0,2,0"
+                                               Opacity="0.6"/>
+                                    <TextBlock Style="{StaticResource PillNumber}"
+                                               Text="{Binding TaskTotal, Mode=OneWay}"
+                                               Foreground="{StaticResource FgPrimary}"
+                                               FontWeight="Medium"
+                                               Opacity="0.85"/>
+                                </StackPanel>
+                                <TextBlock DockPanel.Dock="Right"
+                                           Text="TASKS"
+                                           FontSize="11"
+                                           FontWeight="SemiBold"
+                                           Foreground="{StaticResource PillLabelColor}"
+                                           VerticalAlignment="Center"
+                                           Margin="10,0,0,0"
+                                           TextOptions.TextFormattingMode="Ideal"/>
+                            </DockPanel>
+                            <ProgressBar Grid.Row="1"
+                                         Style="{StaticResource MiniProgressBar}"
+                                         Margin="0,5,0,0"
+                                         Value="{Binding TaskProgressPercent, Mode=OneWay}"/>
+                        </Grid>
                     </Border>
 
-                    <Border Background="#4a3400" BorderBrush="#6a4a00" BorderThickness="1"
-                            CornerRadius="3" Padding="6,2" Margin="0,0,6,0"
+                    <!-- PROGRESS STALLED -->
+                    <Border Style="{StaticResource StatusPillWarn}"
                             Visibility="{Binding IsCircuitHalfOpen, Converter={StaticResource BoolToVis}}"
                             ToolTip="Two iterations with no file changes — next iteration is nudged to land concrete edits.">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="⚠" Foreground="#ffd596" FontSize="11"
-                                       VerticalAlignment="Center" Margin="0,0,4,0"/>
-                            <TextBlock Text="PROGRESS STALLED" Foreground="#ffd596"
-                                       FontSize="10" FontWeight="SemiBold"
-                                       VerticalAlignment="Center"/>
+                            <Ellipse Style="{StaticResource PillDot}" Fill="{StaticResource AccentAmber}"/>
+                            <TextBlock Style="{StaticResource PillLabel}"
+                                       Text="PROGRESS STALLED"
+                                       Foreground="{StaticResource AccentAmber}"/>
                         </StackPanel>
                     </Border>
 
-                    <Border Background="#5a1f1f" BorderBrush="#a03838" BorderThickness="1"
-                            CornerRadius="3" Padding="6,2" Margin="0,0,6,0"
+                    <!-- CIRCUIT OPEN -->
+                    <Border Style="{StaticResource StatusPillDanger}"
                             Visibility="{Binding IsCircuitOpen, Converter={StaticResource BoolToVis}}"
                             ToolTip="Three iterations with no file changes — loop paused. Edit the prompt or fix blockers and press Start to resume.">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="⛔" Foreground="#ffb4b4" FontSize="11"
-                                       VerticalAlignment="Center" Margin="0,0,4,0"/>
-                            <TextBlock Text="CIRCUIT OPEN" Foreground="#ffb4b4"
-                                       FontSize="10" FontWeight="SemiBold"
-                                       VerticalAlignment="Center"/>
+                            <Ellipse Style="{StaticResource PillDot}" Fill="{StaticResource AccentRose}"/>
+                            <TextBlock Style="{StaticResource PillLabel}"
+                                       Text="CIRCUIT OPEN"
+                                       Foreground="{StaticResource AccentRose}"/>
                         </StackPanel>
                     </Border>
 
-                    <Border Background="#1a3a2a" BorderBrush="#3a6f50" BorderThickness="1"
-                            CornerRadius="3" Padding="6,2" Margin="0,0,6,0"
+                    <!-- EXIT SIGNAL -->
+                    <Border Style="{StaticResource StatusPillOk}"
                             Visibility="{Binding ExitStatusVisible, Converter={StaticResource BoolToVis}}"
                             ToolTip="Model emitted EXIT_SIGNAL=true — loop ended early.">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="✓" Foreground="#9ce7b0" FontSize="11"
-                                       VerticalAlignment="Center" Margin="0,0,4,0"/>
-                            <TextBlock Text="{Binding ExitStatus}" Foreground="#9ce7b0"
-                                       FontSize="10" FontWeight="SemiBold"
-                                       VerticalAlignment="Center"/>
+                            <Ellipse Style="{StaticResource PillDot}" Fill="{StaticResource AccentEmerald}"/>
+                            <TextBlock Style="{StaticResource PillLabel}"
+                                       Text="{Binding ExitStatus}"
+                                       Foreground="{StaticResource AccentEmerald}"/>
                         </StackPanel>
                     </Border>
                 </StackPanel>
