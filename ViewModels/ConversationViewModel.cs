@@ -319,6 +319,33 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         private set { if (_toolCallCount != value) { _toolCallCount = value; OnChanged(); } }
     }
 
+    // ---- pinned-response surface ----
+    private string _pinnedText = "";
+    public string PinnedText
+    {
+        get => _pinnedText;
+        private set
+        {
+            if (_pinnedText == value) return;
+            _pinnedText = value;
+            OnChanged();
+            OnChanged(nameof(HasPinnedText));
+        }
+    }
+    private bool _pinnedIsThinking;
+    public bool PinnedIsThinking
+    {
+        get => _pinnedIsThinking;
+        private set { if (_pinnedIsThinking != value) { _pinnedIsThinking = value; OnChanged(); OnChanged(nameof(PinnedLabel)); } }
+    }
+    public bool HasPinnedText => !string.IsNullOrWhiteSpace(_pinnedText);
+    public string PinnedLabel => _pinnedIsThinking ? "LAST THINKING" : "LAST RESPONSE";
+
+    // Throttle pinned-text updates so the UI isn't flooded during fast streams.
+    private string? _pendingPinnedText;
+    private bool? _pendingPinnedIsThinking;
+    private DispatcherTimer? _pinFlushTimer;
+
     // ---- loop-health signals (pills in the status bar) ----
 
     private CircuitState _circuitState;
@@ -639,6 +666,25 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         {
             ToolCallCount++;
         });
+        // Pinned response: staged via a 120ms flush timer so fast token streams
+        // don't hammer the UI thread. Each event stages the latest full block
+        // text and kind; the timer commits them together.
+        _pinFlushTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+        _pinFlushTimer.Tick += (_, _) =>
+        {
+            _pinFlushTimer!.Stop();
+            if (_pendingPinnedText is null) return;
+            PinnedIsThinking = _pendingPinnedIsThinking ?? false;
+            PinnedText = _pendingPinnedText;
+            _pendingPinnedText = null;
+            _pendingPinnedIsThinking = null;
+        };
+        _loopRunner.PinnedResponseUpdated += (_, p) => Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            _pendingPinnedText = p.text;
+            _pendingPinnedIsThinking = p.isThinking;
+            if (!_pinFlushTimer!.IsEnabled) _pinFlushTimer.Start();
+        });
         _loopRunner.CircuitStateChanged += (_, s) => Application.Current?.Dispatcher.BeginInvoke(() =>
         {
             CircuitState = s;
@@ -763,6 +809,8 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     {
         CurrentSessionId = null;
         _consoleLog.Clear();
+        PinnedText = "";
+        PinnedIsThinking = false;
     }
 
     /// Called once by the view after it has attached to the ConsoleAppend

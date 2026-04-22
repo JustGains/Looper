@@ -1509,6 +1509,59 @@
                     </DockPanel>
                 </Border>
             </DockPanel>
+            <!-- Pinned last response — sticks to the top of the output pane so
+                 the user can keep reading the model's narrative while tool
+                 calls scroll past below. Updates live as text streams in,
+                 and swaps whenever a new text/thinking block starts. -->
+            <Border DockPanel.Dock="Top"
+                    Background="#1a1c1e"
+                    BorderBrush="{StaticResource Border1}" BorderThickness="1"
+                    CornerRadius="6" Padding="10,8"
+                    Margin="0,0,0,6"
+                    Visibility="{Binding HasPinnedText, Converter={StaticResource BoolToVis}}">
+                <DockPanel LastChildFill="True">
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                        <Ellipse DockPanel.Dock="Left" Width="6" Height="6"
+                                 VerticalAlignment="Center" Margin="0,0,7,0">
+                            <Ellipse.Style>
+                                <Style TargetType="Ellipse">
+                                    <Setter Property="Fill" Value="{StaticResource AccentEmerald}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding PinnedIsThinking}" Value="True">
+                                            <Setter Property="Fill" Value="#c189e8"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Ellipse.Style>
+                        </Ellipse>
+                        <TextBlock Text="{Binding PinnedLabel}"
+                                   FontSize="10" FontWeight="SemiBold"
+                                   Foreground="{StaticResource PillLabelColor}"
+                                   VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <ScrollViewer MaxHeight="110"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <TextBlock Text="{Binding PinnedText}"
+                                   TextWrapping="Wrap"
+                                   FontFamily="Cascadia Code, Cascadia Mono, Consolas"
+                                   FontSize="12"
+                                   Foreground="{StaticResource FgPrimary}"
+                                   LineHeight="17">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding PinnedIsThinking}" Value="True">
+                                            <Setter Property="FontStyle" Value="Italic"/>
+                                            <Setter Property="Foreground" Value="#b5b5bb"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
             <Border Style="{StaticResource PaneFrame}" Background="{StaticResource BgConsole}">
                 <RichTextBox x:Name="ConsoleBox"
                              IsReadOnly="True" IsDocumentEnabled="True"

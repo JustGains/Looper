@@ -23,6 +23,9 @@ public sealed class LoopRunner
     public event EventHandler<string>? ToolCallInvoked;
     public event EventHandler<int>? EstimatedInputCharsSet;
     public event EventHandler<int>? EstimatedOutputCharsAppended;
+    /// Live stream of the current text/thinking block so the UI can pin the
+    /// most recent narrative content above the scrolling tool-call noise.
+    public event EventHandler<(string text, bool isThinking)>? PinnedResponseUpdated;
 
     // --- loop-control signals surfaced to the UI ---
     public event EventHandler<CircuitState>? CircuitStateChanged;
@@ -127,6 +130,7 @@ public sealed class LoopRunner
                     _formatter.ToolCallInvoked += (_, name) => ToolCallInvoked?.Invoke(this, name);
                     _formatter.EstimatedOutputCharsAppended += (_, n) =>
                         EstimatedOutputCharsAppended?.Invoke(this, n);
+                    _formatter.NonToolBlockUpdated += (_, p) => PinnedResponseUpdated?.Invoke(this, p);
                 }
 
                 EstimatedInputCharsSet?.Invoke(this, wrapped.Length);

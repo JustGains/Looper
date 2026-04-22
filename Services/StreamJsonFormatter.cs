@@ -12,6 +12,7 @@ public sealed class StreamJsonFormatter
     private string? _activeToolName;
     private readonly StringBuilder _toolInputBuf = new();
     private readonly StringBuilder _assistantText = new();
+    private readonly StringBuilder _currentBlockText = new();
 
     /// True while a `thinking` block is currently being streamed. Consumers
     /// (e.g. LoopRunner) can use this to relax the inactivity timeout — some
@@ -36,6 +37,12 @@ public sealed class StreamJsonFormatter
     /// Fires once per tool_use block opened by the assistant. Payload is the
     /// tool name (e.g. "Read", "Bash").
     public event EventHandler<string>? ToolCallInvoked;
+    /// Fires on every text/thinking delta with the full accumulated block
+    /// content so far. Consumers use this to pin the "last useful response"
+    /// to the top of the UI while tool calls scroll past below it. Starting
+    /// a new text/thinking block resets the buffer, so the pin swaps
+    /// atomically as each new response/thought begins.
+    public event EventHandler<(string text, bool isThinking)>? NonToolBlockUpdated;
     /// Fires with a count of characters appended to the current assistant
     /// message (text + thinking + tool_use input JSON). Consumers convert to
     /// an estimated token count (≈ chars / 3.7) until the actual `result`
@@ -139,6 +146,7 @@ public sealed class StreamJsonFormatter
     private string OnBlockStart(JsonElement evt)
     {
         _toolInputBuf.Clear();
+        _currentBlockText.Clear();
         if (!evt.TryGetProperty("content_block", out var block)) return "";
         var kind = GetString(block, "type") ?? "";
         _activeBlockKind = kind;
@@ -172,15 +180,24 @@ public sealed class StreamJsonFormatter
                 {
                     EstimatedOutputCharsAppended?.Invoke(this, t.Length);
                     _assistantText.Append(t);
+                    _currentBlockText.Append(t);
                     if (!IterationAskedQuestion && QuestionPattern.IsMatch(t))
                         IterationAskedQuestion = true;
+                    if (_activeBlockKind == "text")
+                        NonToolBlockUpdated?.Invoke(this, (_currentBlockText.ToString(), false));
                 }
                 return t;
             }
             case "thinking_delta":
             {
                 var th = GetString(delta, "thinking") ?? "";
-                if (th.Length > 0) EstimatedOutputCharsAppended?.Invoke(this, th.Length);
+                if (th.Length > 0)
+                {
+                    EstimatedOutputCharsAppended?.Invoke(this, th.Length);
+                    _currentBlockText.Append(th);
+                    if (_activeBlockKind == "thinking")
+                        NonToolBlockUpdated?.Invoke(this, (_currentBlockText.ToString(), true));
+                }
                 // Preserve the `│ ` gutter on every new line inside the
                 // thinking block so the styling rule can match them.
                 return th.Replace("\n", "\n│ ");
