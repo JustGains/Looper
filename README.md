@@ -12,6 +12,10 @@ Write a prompt, hit Start, watch it work. Loop it, interject mid-run, and keep c
 
 <br clear="right"/>
 
+<p align="center">
+  <img src="screenshot.png" alt="JustCode — main window" width="900"/>
+</p>
+
 ---
 
 ## What it does
