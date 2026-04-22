@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.IO;
 using System.Text;
-using Looper.Models;
+using JustCode.Models;
 
-namespace Looper.Services;
+namespace JustCode.Services;
 
 public sealed class CliProcessRunner
 {
@@ -19,7 +19,7 @@ public sealed class CliProcessRunner
         var resolved = ResolveExecutable(fileName);
         if (resolved == null)
         {
-            ErrorLine?.Invoke(this, $"[looper] executable not found on PATH: {fileName}");
+            ErrorLine?.Invoke(this, $"[justcode] executable not found on PATH: {fileName}");
             return -1;
         }
 

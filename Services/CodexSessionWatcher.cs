@@ -1,6 +1,6 @@
 using System.IO;
 
-namespace Looper.Services;
+namespace JustCode.Services;
 
 /// Watches ~/.codex/sessions/ for newly-created .jsonl session files.
 /// The filename (without extension) IS the session id that

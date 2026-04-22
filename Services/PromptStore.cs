@@ -1,7 +1,7 @@
 using System.IO;
 using System.Windows.Threading;
 
-namespace Looper.Services;
+namespace JustCode.Services;
 
 public sealed class PromptStore
 {

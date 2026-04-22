@@ -1,7 +1,8 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
-namespace Looper.Services;
+namespace JustCode.Services;
 
 /// Parses newline-delimited JSON from `claude --output-format stream-json
 /// --include-partial-messages` into readable console chunks.
@@ -10,19 +11,51 @@ public sealed class StreamJsonFormatter
     private string? _activeBlockKind;
     private string? _activeToolName;
     private readonly StringBuilder _toolInputBuf = new();
+    private readonly StringBuilder _assistantText = new();
 
     /// True while a `thinking` block is currently being streamed. Consumers
     /// (e.g. LoopRunner) can use this to relax the inactivity timeout — some
     /// models go silent for minutes while reasoning.
     public bool IsInThinking => string.Equals(_activeBlockKind, "thinking", StringComparison.Ordinal);
 
+    // -------- Per-iteration signals the LoopRunner reads after the turn --------
+
+    /// True if the assistant's output contains a `---RALPH_STATUS---` block
+    /// with `EXIT_SIGNAL: true`.
+    public bool IterationExitSignal { get; private set; }
+    /// The `STATUS:` line value inside the RALPH_STATUS block (COMPLETE,
+    /// IN_PROGRESS, BLOCKED, etc.), or null if no block was found.
+    public string? IterationStatus { get; private set; }
+    /// True if the assistant asked the user a clarifying question this turn.
+    public bool IterationAskedQuestion { get; private set; }
+    /// Count of `tool_result` blocks that returned `is_error: true`.
+    public int IterationToolErrors { get; private set; }
+
     public event EventHandler<string>? SessionIdCaptured;
     public event EventHandler<(long input, long output, long cached)>? TokenUsageReported;
+    /// Fires once per tool_use block opened by the assistant. Payload is the
+    /// tool name (e.g. "Read", "Bash").
+    public event EventHandler<string>? ToolCallInvoked;
     /// Fires with a count of characters appended to the current assistant
     /// message (text + thinking + tool_use input JSON). Consumers convert to
     /// an estimated token count (≈ chars / 3.7) until the actual `result`
     /// usage arrives and corrects it.
     public event EventHandler<int>? EstimatedOutputCharsAppended;
+
+    private static readonly Regex RalphStatusBlock = new(
+        @"---RALPH_STATUS---\s*(?<body>.*?)\s*---RALPH_STATUS---",
+        RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ExitSignalLine = new(
+        @"EXIT_SIGNAL\s*:\s*true",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex StatusLine = new(
+        @"STATUS\s*:\s*(?<v>[A-Z_]+)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // Plain-language clarifying-question patterns. Kept narrow to avoid false
+    // positives on the model's own rhetorical phrasing inside prose.
+    private static readonly Regex QuestionPattern = new(
+        @"\b(?:should I|would you like|do you want|do you need|could you (?:confirm|clarify)|please (?:confirm|clarify)|let me know (?:which|whether|if))\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public string Format(string line)
     {
@@ -119,6 +152,7 @@ public sealed class StreamJsonFormatter
                 return "\n🧠 thinking (redacted)\n│ [encrypted thinking — not shown]\n";
             case "tool_use":
                 _activeToolName = GetString(block, "name") ?? "?";
+                ToolCallInvoked?.Invoke(this, _activeToolName);
                 return "";
             default:
                 return "";
@@ -134,7 +168,13 @@ public sealed class StreamJsonFormatter
             case "text_delta":
             {
                 var t = GetString(delta, "text") ?? "";
-                if (t.Length > 0) EstimatedOutputCharsAppended?.Invoke(this, t.Length);
+                if (t.Length > 0)
+                {
+                    EstimatedOutputCharsAppended?.Invoke(this, t.Length);
+                    _assistantText.Append(t);
+                    if (!IterationAskedQuestion && QuestionPattern.IsMatch(t))
+                        IterationAskedQuestion = true;
+                }
                 return t;
             }
             case "thinking_delta":
@@ -179,7 +219,7 @@ public sealed class StreamJsonFormatter
     /// We already rendered content via stream_event deltas; skip full assistant messages.
     private static string FormatAssistant(JsonElement _) => "";
 
-    private static string FormatUser(JsonElement root)
+    private string FormatUser(JsonElement root)
     {
         if (!root.TryGetProperty("message", out var msg)) return "";
         if (!msg.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array) return "";
@@ -190,6 +230,7 @@ public sealed class StreamJsonFormatter
             if (itype == "tool_result")
             {
                 var isError = item.TryGetProperty("is_error", out var err) && err.ValueKind == JsonValueKind.True;
+                if (isError) IterationToolErrors++;
                 var text = ExtractToolResultText(item);
                 var prefix = isError ? "⚠" : "⎿";
                 sb.Append('\n').Append(prefix).Append(' ').Append(Truncate(text, 400)).Append('\n');
@@ -198,8 +239,19 @@ public sealed class StreamJsonFormatter
         return sb.ToString();
     }
 
+    /// Default context window size assumed when computing fill % for Claude
+    /// models. All current Claude 4.x tiers share a 200k window; the 1M beta
+    /// variant is rare enough that we stick with 200k as a universal baseline.
+    private const long DefaultContextTokens = 200_000;
+
     private string FormatResult(JsonElement root)
     {
+        // Scan the accumulated assistant text one last time for the RALPH_STATUS
+        // block. Doing it here (instead of on every delta) keeps the hot path
+        // cheap and guarantees we see the whole block even if it streamed in
+        // pieces.
+        ParseRalphStatusFromAccumulated();
+
         var subtype = GetString(root, "subtype") ?? "";
         var parts = new List<string>();
         if (root.TryGetProperty("duration_ms", out var dur) && dur.ValueKind == JsonValueKind.Number)
@@ -217,13 +269,19 @@ public sealed class StreamJsonFormatter
             {
                 var s = $"{(inTok ?? 0):N0} in / {(outTok ?? 0):N0} out";
                 if (cached != null && cached > 0) s += $" ({cached:N0} cached)";
+                if (inTok is > 0)
+                {
+                    double pct = inTok.Value * 100.0 / DefaultContextTokens;
+                    s += $" · ~{pct:0.0}% ctx";
+                }
                 parts.Add(s);
                 TokenUsageReported?.Invoke(this,
                     ((long)(inTok ?? 0), (long)(outTok ?? 0), (long)(cached ?? 0)));
             }
         }
         var detail = parts.Count > 0 ? " " + string.Join(" · ", parts) : "";
-        return $"\n[done{(string.IsNullOrEmpty(subtype) ? "" : $":{subtype}")}]{detail}\n";
+        var suffix = string.IsNullOrEmpty(subtype) || subtype == "success" ? "" : $":{subtype}";
+        return $"\n[usage{suffix}]{detail}\n";
     }
 
     private static string SummariseToolInput(string json)
@@ -270,6 +328,18 @@ public sealed class StreamJsonFormatter
             return sb.ToString();
         }
         return "";
+    }
+
+    private void ParseRalphStatusFromAccumulated()
+    {
+        if (_assistantText.Length == 0) return;
+        var text = _assistantText.ToString();
+        var m = RalphStatusBlock.Match(text);
+        if (!m.Success) return;
+        var body = m.Groups["body"].Value;
+        if (ExitSignalLine.IsMatch(body)) IterationExitSignal = true;
+        var sm = StatusLine.Match(body);
+        if (sm.Success) IterationStatus = sm.Groups["v"].Value.ToUpperInvariant();
     }
 
     private static string? GetString(JsonElement el, string prop) =>

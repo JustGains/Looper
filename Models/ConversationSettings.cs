@@ -1,4 +1,4 @@
-namespace Looper.Models;
+namespace JustCode.Models;
 
 public sealed class ConversationSettings
 {
@@ -15,6 +15,15 @@ public sealed class ConversationSettings
     public string? ClaudeEffort { get; set; }
     public string? CodexModel { get; set; }
     public string? CodexEffort { get; set; }
+
+    /// Last captured CLI session id. Persisted so that a conversation can
+    /// resume (Claude `--resume`, Codex `exec resume`) across app restarts.
+    public string? LastSessionId { get; set; }
+
+    /// UTC timestamp captured when LastSessionId was last updated. Used to
+    /// auto-expire stale sessions (default 24h) so we don't try to resume
+    /// into a context the model has long forgotten.
+    public DateTime? LastSessionTimestamp { get; set; }
 
     /// Map of short `@label` (the portion after '@', e.g. "WorkoutScreen.tsx"
     /// or "workout/WorkoutScreen.tsx" for disambiguation) → full relative path.

@@ -7,7 +7,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Media;
 
-namespace Looper.Services;
+namespace JustCode.Services;
 
 /// Renders `@path` tokens in a TextBox as filled pills showing only the
 /// filename. The TextBox still holds the full path as its actual Text value

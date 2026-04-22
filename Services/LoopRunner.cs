@@ -1,6 +1,7 @@
-using Looper.Models;
+using System.IO;
+using JustCode.Models;
 
-namespace Looper.Services;
+namespace JustCode.Services;
 
 public sealed class LoopRunner
 {
@@ -19,8 +20,14 @@ public sealed class LoopRunner
     public event EventHandler<string>? PromptInjected;
     public event EventHandler<string>? SessionCaptured;
     public event EventHandler<(long input, long output, long cached)>? TokenUsageReported;
+    public event EventHandler<string>? ToolCallInvoked;
     public event EventHandler<int>? EstimatedInputCharsSet;
     public event EventHandler<int>? EstimatedOutputCharsAppended;
+
+    // --- loop-control signals surfaced to the UI ---
+    public event EventHandler<CircuitState>? CircuitStateChanged;
+    public event EventHandler<string>? ExitSignalReceived; // payload = STATUS (COMPLETE, BLOCKED, …)
+    public event EventHandler<(int open, int closed)>? TaskStatsUpdated;
 
     public bool IsRunning => _cts != null;
 
@@ -49,27 +56,64 @@ public sealed class LoopRunner
             Output?.Invoke(this, chunk);
     }
 
-    public async Task RunAsync(Func<string> promptProvider, ConversationSettings settings, string workingDirectory, string tasksRelativePath)
+    public async Task RunAsync(Func<string> promptProvider, Func<string?> tryDequeueQueued, ConversationSettings settings, string workingDirectory, string tasksRelativePath, string? initialSessionId = null, bool chatOnly = false)
     {
         if (IsRunning) return;
 
         var cts = new CancellationTokenSource();
         lock (_lock) _cts = cts;
-        _capturedSessionId = null;
+        _capturedSessionId = initialSessionId;
 
-        // For Codex, watch ~/.codex/sessions/ for new session files so we can
-        // pin the session id and use `exec resume <id>` on iteration 2+.
         if (settings.Tool == CliTool.Codex && settings.KeepContext)
             _codexWatcher.Start();
 
+        // Loop-level state (reset per Start).
+        var git = new GitProgressTracker(workingDirectory);
+        var circuit = new ProgressCircuitBreaker();
+        CircuitStateChanged?.Invoke(this, circuit.State);
+        var carryGuidance = new List<string>(); // corrective notes for the next iteration
+
         try
         {
-            int effectiveMax = settings.RalphEnabled ? Math.Max(1, settings.MaxIterations) : 1;
+            int effectiveMax = chatOnly
+                ? 0
+                : (settings.RalphEnabled ? Math.Max(1, settings.MaxIterations) : 1);
             int iter = 1;
-            while (iter <= effectiveMax && !cts.IsCancellationRequested)
+            while (!cts.IsCancellationRequested)
             {
-                var currentPrompt = promptProvider();
-                var wrapped = BuildWrappedPrompt(currentPrompt, effectiveMax, tasksRelativePath);
+                // If the circuit is OPEN we halt the scheduled loop, but still
+                // allow queued chat turns (manual interjection).
+                var queuedPrompt = tryDequeueQueued();
+                bool isQueued = queuedPrompt != null;
+                if (!isQueued && circuit.State == CircuitState.Open)
+                {
+                    Output?.Invoke(this, "[justcode] circuit open — progress stalled for "
+                        + $"{circuit.ConsecutiveNoProgress} iterations. Pausing the loop. "
+                        + "Fix the blockers manually (or edit the prompt and press Start) "
+                        + "to resume.\n");
+                    Status?.Invoke(this, "Circuit open");
+                    break;
+                }
+
+                var stats = ReadTaskStats(workingDirectory, tasksRelativePath);
+                TaskStatsUpdated?.Invoke(this, (stats.Open, stats.Closed));
+
+                string currentPrompt;
+                string wrapped;
+                if (isQueued)
+                {
+                    currentPrompt = queuedPrompt!;
+                    wrapped = currentPrompt;
+                }
+                else
+                {
+                    if (iter > effectiveMax) break;
+                    currentPrompt = promptProvider();
+                    wrapped = BuildWrappedPrompt(
+                        currentPrompt, iter, effectiveMax, tasksRelativePath,
+                        stats, carryGuidance, circuit.State);
+                }
+                carryGuidance.Clear();
 
                 _formatter = settings.Tool == CliTool.ClaudeCode ? new StreamJsonFormatter() : null;
                 if (_formatter != null)
@@ -80,23 +124,35 @@ public sealed class LoopRunner
                         SessionCaptured?.Invoke(this, sid);
                     };
                     _formatter.TokenUsageReported += (_, u) => TokenUsageReported?.Invoke(this, u);
+                    _formatter.ToolCallInvoked += (_, name) => ToolCallInvoked?.Invoke(this, name);
                     _formatter.EstimatedOutputCharsAppended += (_, n) =>
                         EstimatedOutputCharsAppended?.Invoke(this, n);
                 }
 
-                // At the start of each iteration fire the estimated input
-                // chars — wrapped prompt length is the model's input payload.
                 EstimatedInputCharsSet?.Invoke(this, wrapped.Length);
 
-                IterationChanged?.Invoke(this, (iter, effectiveMax));
-                PromptInjected?.Invoke(this, currentPrompt);
-                Output?.Invoke(this, $"\n── iteration {iter}/{settings.MaxIterations} ──\n");
+                // Snapshot working tree state BEFORE the CLI runs, so we can
+                // detect progress afterwards. Queued turns don't participate
+                // in stuck-loop detection (they're manual interjections).
+                if (!isQueued) git.Snapshot();
+
+                var body = string.IsNullOrWhiteSpace(currentPrompt) ? "<empty>" : currentPrompt;
+                if (isQueued)
+                {
+                    Output?.Invoke(this, $"\n── queued message ──\n{body}\n");
+                }
+                else
+                {
+                    IterationChanged?.Invoke(this, (iter, effectiveMax));
+                    PromptInjected?.Invoke(this, currentPrompt);
+                    Output?.Invoke(this, $"\n── iteration {iter}/{effectiveMax} ──\n{body}\n");
+                }
                 Status?.Invoke(this, "Running");
 
                 _inactivityTripped = false;
                 StartInactivity(settings.TimeoutSeconds);
                 int exitCode;
-                var continueSession = settings.KeepContext && iter > 1;
+                var continueSession = settings.KeepContext && (iter > 1 || isQueued || !string.IsNullOrEmpty(_capturedSessionId));
                 try
                 {
                     exitCode = await _runner.RunAsync(settings, workingDirectory, wrapped, continueSession, _capturedSessionId, cts.Token);
@@ -114,13 +170,61 @@ public sealed class LoopRunner
 
                 if (_inactivityTripped)
                 {
-                    Output?.Invoke(this, $"[looper] no output for {settings.TimeoutSeconds}s — killed; retrying iteration {iter}\n");
+                    var label = isQueued ? "queued message" : $"iteration {iter}";
+                    Output?.Invoke(this, $"[justcode] no output for {settings.TimeoutSeconds}s — killed; retrying {label}\n");
                     Status?.Invoke(this, "Restarting");
                     continue;
                 }
 
-                Output?.Invoke(this, $"[looper] iteration {iter}/{effectiveMax} exited with code {exitCode}\n");
-                iter++;
+                // --- Post-iteration signal collection ---
+                var f = _formatter;
+                bool exitRequested = false;
+                if (f != null)
+                {
+                    if (f.IterationExitSignal)
+                    {
+                        exitRequested = true;
+                        ExitSignalReceived?.Invoke(this, f.IterationStatus ?? "COMPLETE");
+                    }
+                    if (f.IterationAskedQuestion)
+                        carryGuidance.Add("The previous iteration asked a clarifying question. Do NOT ask questions — make reasonable decisions and proceed. If a decision is truly ambiguous, document the assumption in `tasks.md` and continue.");
+                    if (f.IterationToolErrors >= 2)
+                        carryGuidance.Add($"The previous iteration had {f.IterationToolErrors} tool errors. Read the error output carefully, diagnose the root cause, and verify your fix before continuing.");
+                }
+
+                // Git progress → circuit breaker. Skipped for queued turns.
+                if (!isQueued)
+                {
+                    if (git.IsGitRepo && !git.HasProgressed())
+                    {
+                        circuit.RecordNoProgress();
+                        Output?.Invoke(this, $"[justcode] no git progress this iteration (streak: {circuit.ConsecutiveNoProgress}).\n");
+                    }
+                    else
+                    {
+                        if (circuit.ConsecutiveNoProgress > 0)
+                            Output?.Invoke(this, "[justcode] progress detected — circuit reset.\n");
+                        circuit.RecordProgress();
+                    }
+                    CircuitStateChanged?.Invoke(this, circuit.State);
+                    if (circuit.State == CircuitState.HalfOpen)
+                        carryGuidance.Add("Progress has stalled for two iterations (no file changes). This iteration must land concrete edits: inspect what you've been planning vs. what actually changed, and make real file modifications.");
+                }
+
+                if (isQueued)
+                    Output?.Invoke(this, $"[justcode] queued message exited with code {exitCode}\n");
+                else
+                    Output?.Invoke(this, $"[justcode] iteration {iter}/{effectiveMax} exited with code {exitCode}\n");
+
+                // Early exit on explicit model signal.
+                if (exitRequested)
+                {
+                    Output?.Invoke(this, $"[justcode] model reported EXIT_SIGNAL (status={f!.IterationStatus ?? "?"}) — ending loop.\n");
+                    Status?.Invoke(this, "Completed");
+                    return;
+                }
+
+                if (!isQueued) iter++;
             }
 
             Status?.Invoke(this, cts.IsCancellationRequested ? "Stopped" : "Completed");
@@ -145,11 +249,7 @@ public sealed class LoopRunner
         }
     }
 
-    /// Multiplier applied to the base inactivity timeout while the model is
-    /// in a thinking block (no output streamed). Gives long reasoning passes
-    /// breathing room without letting genuinely stuck iterations run forever.
     private const double ThinkingTimeoutFactor = 3.0;
-
     private double _baseInactivityMs;
 
     private void StartInactivity(int timeoutSec)
@@ -170,8 +270,6 @@ public sealed class LoopRunner
         var t = _inactivityTimer;
         if (t == null) return;
         t.Stop();
-        // If the model is currently inside a thinking block, extend the
-        // tolerance — some models stop emitting for 30-90s during reasoning.
         var factor = _formatter?.IsInThinking == true ? ThinkingTimeoutFactor : 1.0;
         t.Interval = _baseInactivityMs * factor;
         t.Start();
@@ -185,13 +283,63 @@ public sealed class LoopRunner
         t?.Dispose();
     }
 
-    private static string BuildWrappedPrompt(string userPrompt, int maxIter, string tasksRelativePath)
+    private static TaskStats ReadTaskStats(string workingDirectory, string tasksRelativePath)
+    {
+        try
+        {
+            var abs = Path.Combine(workingDirectory, tasksRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            var content = File.Exists(abs) ? File.ReadAllText(abs) : "";
+            return TasksMarkdownAnalyzer.Analyze(content);
+        }
+        catch
+        {
+            return new TaskStats(0, 0, null);
+        }
+    }
+
+    private static string BuildWrappedPrompt(
+        string userPrompt,
+        int iter,
+        int maxIter,
+        string tasksRelativePath,
+        TaskStats stats,
+        IReadOnlyList<string> guidance,
+        CircuitState circuit)
     {
         var tp = string.IsNullOrWhiteSpace(tasksRelativePath) ? ".looper/tasks.md" : tasksRelativePath.Replace('\\', '/');
-        return $@"Track work in `{tp}` (relative to cwd). Create it if missing. Use GitHub checkbox syntax (`- [ ]` / `- [x]`). Append new tasks as you discover them, tick boxes in place as you finish. Do not rewrite the file from scratch.
+
+        // Loop context banner — gives the model awareness of where it is.
+        var ctx = new System.Text.StringBuilder();
+        ctx.Append("LOOP ").Append(iter).Append('/').Append(maxIter);
+        ctx.Append(" · ").Append(stats.Open).Append(" open task").Append(stats.Open == 1 ? "" : "s");
+        if (stats.Closed > 0) ctx.Append(" · ").Append(stats.Closed).Append(" done");
+        if (circuit != CircuitState.Closed)
+            ctx.Append(" · CIRCUIT ").Append(circuit == CircuitState.Open ? "OPEN" : "HALF-OPEN");
+
+        var guidanceBlock = guidance.Count > 0
+            ? "\n--- CORRECTIVE GUIDANCE (from prior iteration) ---\n- " + string.Join("\n- ", guidance) + "\n"
+            : "";
+
+        var summaryBlock = string.IsNullOrWhiteSpace(stats.LastSummary)
+            ? ""
+            : "\n--- LAST SESSION SUMMARY (from `" + tp + "`) ---\n" + stats.LastSummary + "\n";
+
+        return $@"{ctx}
+
+Track work in `{tp}` (relative to cwd). Create it if missing. Use GitHub checkbox syntax (`- [ ]` / `- [x]`). Append new tasks as you discover them, tick boxes in place as you finish. Do not rewrite the file from scratch.
 
 In this run, do as much useful work as you can — complete as many tasks as possible before stopping. Do NOT stop after a single task. Keep going until the list is done, you are blocked, or there is nothing sensible left to do.
 
+Before you stop (whether the list is done, you are blocked, or you've reached a sensible stopping point), you MUST append a completion summary to `{tp}` under a new `### <UTC timestamp> — session summary` heading. Use 1-line bullets covering: what you actually completed this session, any decisions worth remembering, and any blockers or follow-ups you're leaving for the next session. Keep prior summaries below; never overwrite them.
+
+At the very end of your response — AFTER the summary has been appended to `{tp}` — emit a single status block in plain text, exactly like this (no backticks, no code fence):
+
+---RALPH_STATUS---
+EXIT_SIGNAL: <true|false>
+STATUS: <COMPLETE|IN_PROGRESS|BLOCKED>
+---RALPH_STATUS---
+
+Set EXIT_SIGNAL to true **only** when the user's goal is fully achieved or you are genuinely stuck and further iterations can't help. Otherwise set it to false so the loop continues.{guidanceBlock}{summaryBlock}
 --- USER PROMPT ---
 {userPrompt}
 ";

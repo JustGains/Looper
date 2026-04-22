@@ -7,11 +7,11 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Interop;
 using System.Windows.Media;
-using Looper.Services;
-using Looper.ViewModels;
+using JustCode.Services;
+using JustCode.ViewModels;
 using Microsoft.Win32;
 
-namespace Looper;
+namespace JustCode;
 
 public partial class MainWindow : Window
 {
@@ -86,6 +86,11 @@ public partial class MainWindow : Window
     {
         c.ConsoleAppend -= OnConversationConsoleAppend;
         c.ConsoleAppend += OnConversationConsoleAppend;
+        // Replay persisted console history once, on first hook, through the
+        // styling pipeline so it looks like the rest of the stream.
+        var history = c.PopConsoleHistory();
+        if (!string.IsNullOrEmpty(history))
+            OnConversationConsoleAppend(c, history);
     }
 
     private void UnhookConversation(ConversationViewModel c) =>
@@ -417,10 +422,13 @@ public partial class MainWindow : Window
         return idx;
     }
 
-    private (int start, int end, string token)? CurrentCaretToken()
+    private TextBox? _activeMentionBox;
+    private bool _suppressMentionUpdate;
+
+    private static (int start, int end, string token)? CurrentCaretToken(TextBox box)
     {
-        var text = PromptBox.Text ?? "";
-        var caret = PromptBox.CaretIndex;
+        var text = box.Text ?? "";
+        var caret = box.CaretIndex;
         if (caret < 0 || caret > text.Length) return null;
         int start = caret;
         while (start > 0 && !char.IsWhiteSpace(text[start - 1])) start--;
@@ -430,27 +438,25 @@ public partial class MainWindow : Window
     }
 
     private void PromptBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        UpdateMentionPopup();
-    }
+        => UpdateMentionPopup(PromptBox);
 
     private void PromptBox_SelectionChanged(object sender, RoutedEventArgs e)
     {
-        UpdateMentionPopup();
-        AutoSelectMentionIfCaretInside();
+        UpdateMentionPopup(PromptBox);
+        AutoSelectMentionIfCaretInside(PromptBox);
     }
 
     /// If the caret lands inside an @ref token and nothing is yet selected,
     /// select the whole token so it behaves as an atomic chip (type/delete
     /// replaces the whole thing rather than editing the hidden full path).
     private bool _autoSelecting;
-    private void AutoSelectMentionIfCaretInside()
+    private void AutoSelectMentionIfCaretInside(TextBox box)
     {
         if (_autoSelecting) return;
-        if (PromptBox.SelectionLength > 0) return;
-        var text = PromptBox.Text ?? "";
+        if (box.SelectionLength > 0) return;
+        var text = box.Text ?? "";
         if (string.IsNullOrEmpty(text)) return;
-        var caret = PromptBox.CaretIndex;
+        var caret = box.CaretIndex;
         foreach (Match m in MentionRef.Matches(text))
         {
             if (caret > m.Index && caret < m.Index + m.Length)
@@ -458,7 +464,7 @@ public partial class MainWindow : Window
                 _autoSelecting = true;
                 try
                 {
-                    PromptBox.Select(m.Index, m.Length);
+                    box.Select(m.Index, m.Length);
                 }
                 finally { _autoSelecting = false; }
                 break;
@@ -470,16 +476,17 @@ public partial class MainWindow : Window
     {
         // Popup's StaysOpen="False" already closes on outside-click;
         // this backs it up if focus moves via keyboard.
-        if (MentionPopup.IsOpen && !MentionList.IsKeyboardFocusWithin)
+        if (_activeMentionBox == PromptBox && MentionPopup.IsOpen && !MentionList.IsKeyboardFocusWithin)
             CloseMentionPopup();
     }
 
-    private void UpdateMentionPopup()
+    private void UpdateMentionPopup(TextBox box)
     {
-        var tok = CurrentCaretToken();
+        if (_suppressMentionUpdate) return;
+        var tok = CurrentCaretToken(box);
         if (tok is null)
         {
-            CloseMentionPopup();
+            if (_activeMentionBox == box) CloseMentionPopup();
             return;
         }
         var (start, _, token) = tok.Value;
@@ -487,7 +494,7 @@ public partial class MainWindow : Window
         // character after it (codex parity).
         if (token.Length < 2 || token[0] != '@')
         {
-            CloseMentionPopup();
+            if (_activeMentionBox == box) CloseMentionPopup();
             return;
         }
 
@@ -495,29 +502,33 @@ public partial class MainWindow : Window
         var idx = GetIndexForCurrentProject();
         if (idx == null)
         {
-            CloseMentionPopup();
+            if (_activeMentionBox == box) CloseMentionPopup();
             return;
         }
 
         var results = idx.Search(query);
         if (results.Count == 0)
         {
-            CloseMentionPopup();
+            if (_activeMentionBox == box) CloseMentionPopup();
             return;
         }
 
         MentionList.ItemsSource = results;
         if (MentionList.SelectedIndex < 0) MentionList.SelectedIndex = 0;
         _mentionTokenStart = start;
+        _activeMentionBox = box;
+        MentionPopup.PlacementTarget = box;
         PositionMentionPopup();
         MentionPopup.IsOpen = true;
     }
 
     private void PositionMentionPopup()
     {
+        var box = _activeMentionBox;
+        if (box == null) return;
         try
         {
-            var rect = PromptBox.GetRectFromCharacterIndex(_mentionTokenStart);
+            var rect = box.GetRectFromCharacterIndex(_mentionTokenStart);
             if (rect.IsEmpty) return;
             MentionPopup.HorizontalOffset = rect.X;
             MentionPopup.VerticalOffset = rect.Y + rect.Height + 2;
@@ -527,13 +538,15 @@ public partial class MainWindow : Window
 
     private void CloseMentionPopup()
     {
-        if (!MentionPopup.IsOpen) return;
-        MentionPopup.IsOpen = false;
+        if (MentionPopup.IsOpen) MentionPopup.IsOpen = false;
         _mentionTokenStart = -1;
+        _activeMentionBox = null;
     }
 
     private void AcceptMentionSelection()
     {
+        var box = _activeMentionBox;
+        if (box == null) return;
         if (!MentionPopup.IsOpen) return;
         if (MentionList.SelectedItem is not string fullPath) return;
         if (_mentionTokenStart < 0) return;
@@ -544,7 +557,7 @@ public partial class MainWindow : Window
         // Register the full path and use a short label in the visible prompt.
         var shortLabel = conv.RegisterMention(fullPath);
 
-        var text = PromptBox.Text ?? "";
+        var text = box.Text ?? "";
         int start = _mentionTokenStart;
         int end = start;
         while (end < text.Length && !char.IsWhiteSpace(text[end])) end++;
@@ -553,18 +566,15 @@ public partial class MainWindow : Window
         var newText = text.Substring(0, start) + insert + text.Substring(end);
         var newCaret = start + insert.Length;
 
-        PromptBox.TextChanged -= PromptBox_TextChanged;
+        _suppressMentionUpdate = true;
         try
         {
-            PromptBox.Text = newText;
-            PromptBox.CaretIndex = newCaret;
+            box.Text = newText;
+            box.CaretIndex = newCaret;
         }
-        finally
-        {
-            PromptBox.TextChanged += PromptBox_TextChanged;
-        }
+        finally { _suppressMentionUpdate = false; }
 
-        PromptBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        box.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
         CloseMentionPopup();
     }
 
@@ -584,7 +594,13 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!MentionPopup.IsOpen) return;
+        if (_activeMentionBox == PromptBox && MentionPopup.IsOpen)
+            HandleMentionPopupKey(e);
+    }
+
+    /// Shared Up/Down/Tab/Enter/Escape navigation for the mention popup.
+    private void HandleMentionPopupKey(System.Windows.Input.KeyEventArgs e)
+    {
         int count = MentionList.Items.Count;
         if (count == 0) return;
         switch (e.Key)
@@ -616,17 +632,22 @@ public partial class MainWindow : Window
     private int _lastTooltipCharIndex = -1;
 
     private void PromptBox_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+        => ShowMentionTooltipAt(PromptBox, e.GetPosition(PromptBox));
+
+    private void PromptBox_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e) =>
+        HideMentionTooltip();
+
+    private void ShowMentionTooltipAt(TextBox box, System.Windows.Point pt)
     {
         try
         {
-            var pt = e.GetPosition(PromptBox);
-            int ci = PromptBox.GetCharacterIndexFromPoint(pt, snapToText: false);
-            if (ci < 0 || ci > (PromptBox.Text?.Length ?? 0))
+            int ci = box.GetCharacterIndexFromPoint(pt, snapToText: false);
+            if (ci < 0 || ci > (box.Text?.Length ?? 0))
             {
                 HideMentionTooltip();
                 return;
             }
-            var text = PromptBox.Text ?? "";
+            var text = box.Text ?? "";
             Match? hit = null;
             foreach (Match m in MentionRef.Matches(text))
             {
@@ -646,12 +667,12 @@ public partial class MainWindow : Window
             string display = label;
             if (conv != null && conv.TryGetMentionFullPath(label, out var full))
                 display = full;
-            // Don't reposition on every pixel move if caret hasn't changed.
-            if (hit.Index == _lastTooltipCharIndex && MentionTooltipPopup.IsOpen) return;
+            if (hit.Index == _lastTooltipCharIndex && MentionTooltipPopup.IsOpen && MentionTooltipPopup.PlacementTarget == box) return;
             _lastTooltipCharIndex = hit.Index;
 
             MentionTooltipText.Text = display;
-            var rect = PromptBox.GetRectFromCharacterIndex(hit.Index);
+            MentionTooltipPopup.PlacementTarget = box;
+            var rect = box.GetRectFromCharacterIndex(hit.Index);
             if (!rect.IsEmpty)
             {
                 MentionTooltipPopup.HorizontalOffset = rect.X;
@@ -661,9 +682,6 @@ public partial class MainWindow : Window
         }
         catch { HideMentionTooltip(); }
     }
-
-    private void PromptBox_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e) =>
-        HideMentionTooltip();
 
     private void HideMentionTooltip()
     {
@@ -815,13 +833,128 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.ToString(), "Looper error", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(this, ex.ToString(), "JustCode error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
     private void ClearConsole_Click(object sender, RoutedEventArgs e)
     {
-        _vm.SelectedProject?.SelectedConversation?.ConsoleParagraph.Inlines.Clear();
+        var conv = _vm.SelectedProject?.SelectedConversation;
+        if (conv == null) return;
+        conv.ConsoleParagraph.Inlines.Clear();
+        conv.ClearSession();
+    }
+
+    private void ChatSend_Click(object sender, RoutedEventArgs e)
+    {
+        ChatInputBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        _vm.SelectedProject?.SelectedConversation?.EnqueueChat();
+    }
+
+    private void ChatInputBox_TextChanged(object sender, TextChangedEventArgs e)
+        => UpdateMentionPopup(ChatInputBox);
+
+    private void ChatInputBox_SelectionChanged(object sender, RoutedEventArgs e)
+    {
+        UpdateMentionPopup(ChatInputBox);
+        AutoSelectMentionIfCaretInside(ChatInputBox);
+    }
+
+    private void ChatInputBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_activeMentionBox == ChatInputBox && MentionPopup.IsOpen && !MentionList.IsKeyboardFocusWithin)
+            CloseMentionPopup();
+    }
+
+    private void ChatInputBox_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+        => ShowMentionTooltipAt(ChatInputBox, e.GetPosition(ChatInputBox));
+
+    private void ChatInputBox_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e) =>
+        HideMentionTooltip();
+
+    private void ChatInputBox_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        // Mention popup navigation takes precedence when open on this box.
+        if (_activeMentionBox == ChatInputBox && MentionPopup.IsOpen)
+        {
+            HandleMentionPopupKey(e);
+            if (e.Handled) return;
+        }
+
+        var conv = _vm.SelectedProject?.SelectedConversation;
+
+        // Up on the first line recalls queued items (newest → oldest). Down on
+        // the last line steps forward; past the newest restores the draft.
+        if (conv != null && e.Key == System.Windows.Input.Key.Up && IsCaretOnFirstLine(ChatInputBox))
+        {
+            if (conv.QueuedMessages.Count > 0 || conv.IsRecallingQueued)
+            {
+                e.Handled = true;
+                ChatInputBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+                conv.RecallQueuedPrev();
+                MoveChatCaretToEndDeferred();
+                return;
+            }
+        }
+        if (conv != null && e.Key == System.Windows.Input.Key.Down &&
+            conv.IsRecallingQueued && IsCaretOnLastLine(ChatInputBox))
+        {
+            e.Handled = true;
+            ChatInputBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            conv.RecallQueuedNext();
+            MoveChatCaretToEndDeferred();
+            return;
+        }
+
+        // Escape exits recall mode (restores the saved draft).
+        if (e.Key == System.Windows.Input.Key.Escape && conv is { IsRecallingQueued: true })
+        {
+            e.Handled = true;
+            ChatInputBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            conv.ExitRecallMode();
+            MoveChatCaretToEndDeferred();
+            return;
+        }
+
+        // Enter (no shift) sends (draft mode) or exits recall (edit mode).
+        // Shift+Enter inserts newline (default behaviour).
+        if (e.Key == System.Windows.Input.Key.Enter &&
+            (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) == 0)
+        {
+            e.Handled = true;
+            CloseMentionPopup();
+            ChatInputBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            _vm.SelectedProject?.SelectedConversation?.EnqueueChat();
+        }
+    }
+
+    private static bool IsCaretOnFirstLine(TextBox box)
+    {
+        int line = box.GetLineIndexFromCharacterIndex(box.CaretIndex);
+        return line <= 0;
+    }
+
+    private static bool IsCaretOnLastLine(TextBox box)
+    {
+        int endIdx = box.Text?.Length ?? 0;
+        int endLine = box.GetLineIndexFromCharacterIndex(endIdx);
+        int curLine = box.GetLineIndexFromCharacterIndex(box.CaretIndex);
+        return curLine >= endLine;
+    }
+
+    /// Caret must be set after WPF flushes the binding into the TextBox.
+    private void MoveChatCaretToEndDeferred()
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            ChatInputBox.CaretIndex = ChatInputBox.Text?.Length ?? 0;
+        }), System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    private void RemoveQueued_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button b && b.Tag is QueuedChatMessage msg)
+            _vm.SelectedProject?.SelectedConversation?.RemoveQueued(msg);
     }
 
     private void OpenConfig_Click(object sender, RoutedEventArgs e) => _vm.OpenConfigInNotepad();

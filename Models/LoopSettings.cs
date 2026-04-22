@@ -1,7 +1,7 @@
 using System.Text.Json.Serialization;
-using Looper.Services;
+using JustCode.Services;
 
-namespace Looper.Models;
+namespace JustCode.Models;
 
 public enum CliTool
 {

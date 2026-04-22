@@ -1,7 +1,54 @@
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Windows.Threading;
 
-namespace Looper.Services;
+namespace JustCode.Services;
+
+/// Per-tasks.md statistics used to build loop context prompts.
+public readonly record struct TaskStats(int Open, int Closed, string? LastSummary)
+{
+    public int Total => Open + Closed;
+}
+
+public static class TasksMarkdownAnalyzer
+{
+    // Captures both flush and indented checkbox lines, but excludes date
+    // stamps like `[2026-01-29]` by requiring the brackets to contain only a
+    // single space or 'x'/'X'.
+    private static readonly Regex OpenBox = new(@"^[ \t]*- \[[ ]\] ", RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex ClosedBox = new(@"^[ \t]*- \[[xX]\] ", RegexOptions.Multiline | RegexOptions.Compiled);
+
+    /// Finds the most recent `### <anything> — session summary` heading and
+    /// returns everything up to the next blank line or next heading.
+    private static readonly Regex SummaryBlock = new(
+        @"^###\s+.*?session summary\s*$(?<body>(?:\r?\n(?!#|$).*)*)",
+        RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    public static TaskStats Analyze(string? content)
+    {
+        if (string.IsNullOrEmpty(content))
+            return new TaskStats(0, 0, null);
+
+        int open = OpenBox.Matches(content).Count;
+        int closed = ClosedBox.Matches(content).Count;
+
+        string? summary = null;
+        var matches = SummaryBlock.Matches(content);
+        if (matches.Count > 0)
+        {
+            var last = matches[matches.Count - 1];
+            var body = last.Groups["body"].Value.Trim();
+            if (!string.IsNullOrWhiteSpace(body))
+            {
+                // Keep it compact — 240 char cap so loop-context prompts don't
+                // balloon after dozens of iterations.
+                summary = body.Length > 240 ? body.Substring(0, 240) + "…" : body;
+            }
+        }
+
+        return new TaskStats(open, closed, summary);
+    }
+}
 
 public sealed class TasksFileService : IDisposable
 {

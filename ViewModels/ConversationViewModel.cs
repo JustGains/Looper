@@ -1,13 +1,32 @@
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Documents;
 using System.Windows.Threading;
-using Looper.Models;
-using Looper.Services;
+using JustCode.Models;
+using JustCode.Services;
 
-namespace Looper.ViewModels;
+namespace JustCode.ViewModels;
+
+public sealed class QueuedChatMessage : INotifyPropertyChanged
+{
+    public event PropertyChangedEventHandler? PropertyChanged;
+    public string Id { get; } = Guid.NewGuid().ToString("N");
+    private string _text;
+    public string Text
+    {
+        get => _text;
+        set
+        {
+            if (_text == value) return;
+            _text = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Text)));
+        }
+    }
+    public QueuedChatMessage(string text) { _text = text; }
+}
 
 public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
 {
@@ -19,6 +38,8 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     private readonly PromptStore _promptStore;
     private readonly TasksFileService _tasksFile;
     private readonly LoopRunner _loopRunner;
+    private readonly ConsoleLogStore _consoleLog;
+    private string? _pendingConsoleHistory;
     private readonly DispatcherTimer _tasksSaveDebounce;
     private readonly DispatcherTimer _uiTick;
     private DateTime? _iterStartUtc;
@@ -255,6 +276,9 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
 
     public string StartStopText => IsRunning ? "Stop" : "Start";
 
+    /// Sessions older than this are treated as too stale to resume cleanly.
+    private static readonly TimeSpan SessionTTL = TimeSpan.FromHours(24);
+
     private string? _currentSessionId;
     public string? CurrentSessionId
     {
@@ -263,6 +287,9 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         {
             if (_currentSessionId == value) return;
             _currentSessionId = value;
+            _settings.LastSessionId = value;
+            _settings.LastSessionTimestamp = value is null ? null : DateTime.UtcNow;
+            PersistSettings();
             OnChanged();
             OnChanged(nameof(HasSession));
             OnChanged(nameof(SessionShort));
@@ -284,6 +311,215 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     public long InputTokens { get => _inputTokens; private set { if (_inputTokens != value) { _inputTokens = value; OnChanged(); OnChanged(nameof(TokenSummary)); } } }
     public long OutputTokens { get => _outputTokens; private set { if (_outputTokens != value) { _outputTokens = value; OnChanged(); OnChanged(nameof(TokenSummary)); } } }
     public long CachedTokens { get => _cachedTokens; private set { if (_cachedTokens != value) { _cachedTokens = value; OnChanged(); OnChanged(nameof(TokenSummary)); } } }
+
+    private int _toolCallCount;
+    public int ToolCallCount
+    {
+        get => _toolCallCount;
+        private set { if (_toolCallCount != value) { _toolCallCount = value; OnChanged(); } }
+    }
+
+    // ---- loop-health signals (pills in the status bar) ----
+
+    private CircuitState _circuitState;
+    public CircuitState CircuitState
+    {
+        get => _circuitState;
+        private set
+        {
+            if (_circuitState == value) return;
+            _circuitState = value;
+            OnChanged();
+            OnChanged(nameof(CircuitStateLabel));
+            OnChanged(nameof(IsCircuitHalfOpen));
+            OnChanged(nameof(IsCircuitOpen));
+        }
+    }
+    public string CircuitStateLabel => _circuitState switch
+    {
+        CircuitState.HalfOpen => "Progress stalled",
+        CircuitState.Open => "Circuit open",
+        _ => "",
+    };
+    public bool IsCircuitHalfOpen => _circuitState == CircuitState.HalfOpen;
+    public bool IsCircuitOpen => _circuitState == CircuitState.Open;
+
+    private string? _exitStatus;
+    public string? ExitStatus
+    {
+        get => _exitStatus;
+        private set
+        {
+            if (_exitStatus == value) return;
+            _exitStatus = value;
+            OnChanged();
+            OnChanged(nameof(ExitStatusVisible));
+        }
+    }
+    public bool ExitStatusVisible => !string.IsNullOrEmpty(_exitStatus);
+
+    private int _openTasks;
+    public int OpenTasks
+    {
+        get => _openTasks;
+        private set { if (_openTasks != value) { _openTasks = value; OnChanged(); OnChanged(nameof(TaskStatsVisible)); } }
+    }
+    private int _closedTasks;
+    public int ClosedTasks
+    {
+        get => _closedTasks;
+        private set { if (_closedTasks != value) { _closedTasks = value; OnChanged(); OnChanged(nameof(TaskStatsVisible)); } }
+    }
+    public bool TaskStatsVisible => _openTasks + _closedTasks > 0;
+
+    public ObservableCollection<QueuedChatMessage> QueuedMessages { get; } = new();
+
+    public bool HasQueuedMessages => QueuedMessages.Count > 0;
+
+    /// -1 when the chat box holds a new draft; 0..Count-1 when navigating
+    /// previously-queued items via Up/Down for editing. Edits to `ChatInput`
+    /// while in recall mode are written through to the focused queue entry.
+    private int _chatRecallIndex = -1;
+    public int ChatRecallIndex
+    {
+        get => _chatRecallIndex;
+        private set { if (_chatRecallIndex != value) { _chatRecallIndex = value; OnChanged(); OnChanged(nameof(IsRecallingQueued)); } }
+    }
+    public bool IsRecallingQueued => _chatRecallIndex >= 0;
+
+    /// Draft text stashed the moment the user enters recall mode, so we can
+    /// restore it when they navigate past the newest queued item.
+    private string _chatDraftSaved = "";
+    private bool _suppressRecallSync;
+
+    private string _chatInput = "";
+    public string ChatInput
+    {
+        get => _chatInput;
+        set
+        {
+            if (_chatInput == value) return;
+            _chatInput = value;
+            // Live-sync edits through to the focused queued item so that
+            // Up/Down navigation doesn't lose the user's changes.
+            if (!_suppressRecallSync &&
+                _chatRecallIndex >= 0 && _chatRecallIndex < QueuedMessages.Count)
+            {
+                QueuedMessages[_chatRecallIndex].Text = value;
+            }
+            OnChanged();
+        }
+    }
+
+    public void EnqueueChat()
+    {
+        // Enter while recalling = "done editing this queued item". The edits
+        // have already been live-synced; just exit recall and restore the draft.
+        if (_chatRecallIndex >= 0)
+        {
+            ExitRecallMode();
+            return;
+        }
+        var t = (_chatInput ?? "").Trim();
+        if (t.Length == 0) return;
+        QueuedMessages.Add(new QueuedChatMessage(t));
+        ChatInput = "";
+        OnChanged(nameof(HasQueuedMessages));
+        if (!IsRunning) _ = StartRunAsync(chatOnly: true);
+    }
+
+    public void RemoveQueued(QueuedChatMessage msg)
+    {
+        if (msg == null) return;
+        int idx = QueuedMessages.IndexOf(msg);
+        if (idx < 0) return;
+        QueuedMessages.RemoveAt(idx);
+        if (_chatRecallIndex == idx) ExitRecallMode();
+        else if (_chatRecallIndex > idx) ChatRecallIndex = _chatRecallIndex - 1;
+        OnChanged(nameof(HasQueuedMessages));
+    }
+
+    /// Step the recall cursor toward older queued items. Entering recall
+    /// mode for the first time stashes the current draft.
+    public void RecallQueuedPrev()
+    {
+        if (QueuedMessages.Count == 0) return;
+        if (_chatRecallIndex < 0)
+        {
+            _chatDraftSaved = _chatInput ?? "";
+            ChatRecallIndex = QueuedMessages.Count - 1;
+        }
+        else if (_chatRecallIndex > 0)
+        {
+            ChatRecallIndex = _chatRecallIndex - 1;
+        }
+        else return;
+        SetChatInputFromRecall();
+    }
+
+    /// Step the recall cursor toward newer queued items. Going past the most
+    /// recent exits recall and restores the saved draft.
+    public void RecallQueuedNext()
+    {
+        if (_chatRecallIndex < 0) return;
+        if (_chatRecallIndex < QueuedMessages.Count - 1)
+        {
+            ChatRecallIndex = _chatRecallIndex + 1;
+            SetChatInputFromRecall();
+        }
+        else
+        {
+            ExitRecallMode();
+        }
+    }
+
+    public void ExitRecallMode()
+    {
+        if (_chatRecallIndex < 0) return;
+        int idx = _chatRecallIndex;
+        ChatRecallIndex = -1;
+        SetChatInputText(_chatDraftSaved);
+        _chatDraftSaved = "";
+        // If the user blanked the item while editing, drop it so we never
+        // dequeue an empty message and echo an empty banner.
+        if (idx >= 0 && idx < QueuedMessages.Count &&
+            string.IsNullOrWhiteSpace(QueuedMessages[idx].Text))
+        {
+            QueuedMessages.RemoveAt(idx);
+            OnChanged(nameof(HasQueuedMessages));
+        }
+    }
+
+    private void SetChatInputFromRecall()
+    {
+        if (_chatRecallIndex < 0 || _chatRecallIndex >= QueuedMessages.Count) return;
+        SetChatInputText(QueuedMessages[_chatRecallIndex].Text);
+    }
+
+    private void SetChatInputText(string value)
+    {
+        _suppressRecallSync = true;
+        try { ChatInput = value; } finally { _suppressRecallSync = false; }
+    }
+
+    /// Called from LoopRunner between iterations (on UI thread). Removes and
+    /// returns the head of the queue, or null if empty. Adjusts the recall
+    /// cursor so it never points at a dequeued item. Skips blank items so
+    /// that a stray empty queue entry can never surface as a silent submit.
+    private string? TryDequeueQueued()
+    {
+        while (QueuedMessages.Count > 0)
+        {
+            var head = QueuedMessages[0];
+            QueuedMessages.RemoveAt(0);
+            if (_chatRecallIndex == 0) ExitRecallMode();
+            else if (_chatRecallIndex > 0) ChatRecallIndex = _chatRecallIndex - 1;
+            OnChanged(nameof(HasQueuedMessages));
+            if (!string.IsNullOrWhiteSpace(head.Text))
+                return ExpandPromptForSubmission(head.Text);
+        }
+        return null;
+    }
 
     // In-progress iteration estimates (reset when actual usage arrives).
     private long _estInputChars;
@@ -313,6 +549,15 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         _workingDirectory = workingDirectory;
         _settings = settings;
         _persistSettings = persistSettings;
+        // Expire stale session ids on load so we never try to resume into a
+        // context the model has likely forgotten.
+        if (settings.LastSessionTimestamp is { } ts &&
+            DateTime.UtcNow - ts > SessionTTL)
+        {
+            settings.LastSessionId = null;
+            settings.LastSessionTimestamp = null;
+        }
+        _currentSessionId = settings.LastSessionId;
 
         ConsoleParagraph = new Paragraph { Margin = new Thickness(0), TextIndent = 0 };
         ConsoleDocument = new FlowDocument(ConsoleParagraph)
@@ -325,6 +570,9 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         Directory.CreateDirectory(convDir);
         _promptStore = new PromptStore(convDir, PromptFile);
         _tasksFile = new TasksFileService();
+        _consoleLog = new ConsoleLogStore(Path.Combine(convDir, "console.log"));
+        var history = _consoleLog.Load();
+        _pendingConsoleHistory = string.IsNullOrEmpty(history) ? null : history;
 
         _tasksSaveDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         _tasksSaveDebounce.Tick += (_, _) =>
@@ -345,7 +593,11 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
 
         _loopRunner = new LoopRunner(new CliProcessRunner());
         _loopRunner.Output += (_, chunk) =>
-            Application.Current?.Dispatcher.BeginInvoke(() => ConsoleAppend?.Invoke(this, chunk));
+            Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                _consoleLog.Append(chunk);
+                ConsoleAppend?.Invoke(this, chunk);
+            });
         _loopRunner.Status += (_, s) => Application.Current?.Dispatcher.BeginInvoke(() =>
         {
             Status = s;
@@ -371,6 +623,23 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         _loopRunner.SessionCaptured += (_, sid) => Application.Current?.Dispatcher.BeginInvoke(() =>
         {
             CurrentSessionId = sid;
+        });
+        _loopRunner.ToolCallInvoked += (_, _) => Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            ToolCallCount++;
+        });
+        _loopRunner.CircuitStateChanged += (_, s) => Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            CircuitState = s;
+        });
+        _loopRunner.ExitSignalReceived += (_, status) => Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            ExitStatus = status;
+        });
+        _loopRunner.TaskStatsUpdated += (_, t) => Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            OpenTasks = t.open;
+            ClosedTasks = t.closed;
         });
         _loopRunner.TokenUsageReported += (_, u) => Application.Current?.Dispatcher.BeginInvoke(() =>
         {
@@ -419,19 +688,27 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         finally { _suppressTasksSave = false; }
     }
 
-    public async Task ToggleStartStopAsync()
+    public Task ToggleStartStopAsync()
     {
         if (IsRunning)
         {
             _loopRunner.Stop();
-            return;
+            return Task.CompletedTask;
         }
+        return StartRunAsync(chatOnly: false);
+    }
+
+    private async Task StartRunAsync(bool chatOnly)
+    {
         _promptStore.FlushPrompt();
         _promptAtLastInjection = null;
         PromptPendingChange = false;
         InputTokens = 0;
         OutputTokens = 0;
         CachedTokens = 0;
+        ToolCallCount = 0;
+        CircuitState = CircuitState.Closed;
+        ExitStatus = null;
         _estInputChars = 0;
         _estOutputChars = 0;
         OnChanged(nameof(TokenSummary));
@@ -450,7 +727,10 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
                 .Replace('\\', '/');
             await _loopRunner.RunAsync(
                 () => ExpandPromptForSubmission(_prompt),
-                _settings, _workingDirectory, tasksRel);
+                TryDequeueQueued,
+                _settings, _workingDirectory, tasksRel,
+                initialSessionId: _currentSessionId,
+                chatOnly: chatOnly);
         }
         finally
         {
@@ -466,6 +746,22 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     public void StopIfRunning()
     {
         if (IsRunning) _loopRunner.Stop();
+    }
+
+    public void ClearSession()
+    {
+        CurrentSessionId = null;
+        _consoleLog.Clear();
+    }
+
+    /// Called once by the view after it has attached to the ConsoleAppend
+    /// stream. Returns the persisted console history (if any) so the view
+    /// can replay it through its styling pipeline.
+    public string? PopConsoleHistory()
+    {
+        var h = _pendingConsoleHistory;
+        _pendingConsoleHistory = null;
+        return h;
     }
 
     public void NotifyMaxIterChanged() => OnChanged(nameof(IterationLabel));
@@ -535,6 +831,7 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
             _tasksFile.Save(_tasksText);
         }
         _tasksFile.Dispose();
+        _consoleLog.Dispose();
     }
 
     public void Dispose() => Shutdown();

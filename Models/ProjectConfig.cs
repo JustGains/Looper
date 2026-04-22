@@ -1,4 +1,4 @@
-namespace Looper.Models;
+namespace JustCode.Models;
 
 public sealed class ProjectConfig
 {

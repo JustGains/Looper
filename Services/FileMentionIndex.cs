@@ -1,6 +1,6 @@
 using System.IO;
 
-namespace Looper.Services;
+namespace JustCode.Services;
 
 /// Enumerates files under a project's working directory for @-mention
 /// autocomplete. Builds the index on a background thread on first

@@ -8,14 +8,14 @@
     <UseWPF>true</UseWPF>
     <ApplicationIcon>app.ico</ApplicationIcon>
 
-    <AssemblyName>Looper</AssemblyName>
-    <RootNamespace>Looper</RootNamespace>
-    <Product>Looper</Product>
-    <AssemblyTitle>Looper</AssemblyTitle>
+    <AssemblyName>JustCode</AssemblyName>
+    <RootNamespace>JustCode</RootNamespace>
+    <Product>JustCode</Product>
+    <AssemblyTitle>JustCode</AssemblyTitle>
     <Company>JustGains</Company>
     <Authors>JustGains</Authors>
     <Copyright>© JustGains</Copyright>
-    <Description>Looper — a GUI driver for Claude Code and Codex loops.</Description>
+    <Description>JustCode — a GUI driver for Claude Code and Codex loops.</Description>
     <Version>0.1.0</Version>
     <AssemblyVersion>0.1.0.0</AssemblyVersion>
     <FileVersion>0.1.0.0</FileVersion>

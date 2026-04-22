@@ -1,8 +1,8 @@
 using System.IO;
 using System.Text.Json;
-using Looper.Models;
+using JustCode.Models;
 
-namespace Looper.Services;
+namespace JustCode.Services;
 
 public sealed class ConfigStore
 {

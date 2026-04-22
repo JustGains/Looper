@@ -1,16 +1,16 @@
-<Window x:Class="Looper.MainWindow"
+<Window x:Class="JustCode.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:Looper"
-        xmlns:models="clr-namespace:Looper.Models"
+        xmlns:local="clr-namespace:JustCode"
+        xmlns:models="clr-namespace:JustCode.Models"
         xmlns:md="clr-namespace:Markdig.Wpf;assembly=Markdig.Wpf"
         mc:Ignorable="d"
-        Title="{Binding SelectedProject.WorkingDirectory, StringFormat='Looper — {0}', FallbackValue='Looper', TargetNullValue='Looper'}"
+        Title="{Binding SelectedProject.WorkingDirectory, StringFormat='JustCode — {0}', FallbackValue='JustCode', TargetNullValue='JustCode'}"
         Height="820" Width="1360"
         Icon="pack://application:,,,/app.ico"
-        FontFamily="Segoe UI" FontSize="12" Background="#1e1e1e" Foreground="#eaeaea"
+        FontFamily="Segoe UI Variable, Segoe UI" FontSize="12" Background="#1e1e1e" Foreground="#eaeaea"
         TextOptions.TextFormattingMode="Ideal" UseLayoutRounding="True">
     <Window.Resources>
         <ResourceDictionary>
@@ -20,6 +20,24 @@
             <Geometry x:Key="ClaudeIconGeometry">M 233.959793 800.214905 L 468.644287 668.536987 L 472.590637 657.100647 L 468.644287 650.738403 L 457.208069 650.738403 L 417.986633 648.322144 L 283.892639 644.69812 L 167.597321 639.865845 L 54.926208 633.825623 L 26.577238 627.785339 L 0 592.751709 L 2.73832 575.27533 L 26.577238 559.248352 L 60.724873 562.228149 L 136.187973 567.382629 L 249.422867 575.194763 L 331.570496 580.026978 L 453.261841 592.671082 L 472.590637 592.671082 L 475.328857 584.859009 L 468.724915 580.026978 L 463.570557 575.194763 L 346.389313 495.785217 L 219.543671 411.865906 L 153.100723 363.543762 L 117.181267 339.060425 L 99.060455 316.107361 L 91.248367 266.01355 L 123.865784 230.093994 L 167.677887 233.073853 L 178.872513 236.053772 L 223.248367 270.201477 L 318.040283 343.570496 L 441.825592 434.738342 L 459.946411 449.798706 L 467.194672 444.64447 L 468.080597 441.020203 L 459.946411 427.409485 L 392.617493 305.718323 L 320.778564 181.932983 L 288.80542 130.630859 L 280.348999 99.865845 C 277.369171 87.221436 275.194641 76.590698 275.194641 63.624268 L 312.322174 13.20813 L 332.8591 6.604126 L 382.389313 13.20813 L 403.248352 31.328979 L 434.013519 101.71814 L 483.865753 212.537048 L 561.181274 363.221497 L 583.812134 407.919434 L 595.892639 449.315491 L 600.40271 461.959839 L 608.214783 461.959839 L 608.214783 454.711609 L 614.577271 369.825623 L 626.335632 265.61084 L 637.771851 131.516846 L 641.718201 93.745117 L 660.402832 48.483276 L 697.530334 24.000122 L 726.52356 37.852417 L 750.362549 72 L 747.060486 94.067139 L 732.886047 186.201416 L 705.100708 330.52356 L 686.979919 427.167847 L 697.530334 427.167847 L 709.61084 415.087341 L 758.496704 350.174561 L 840.644348 247.490051 L 876.885925 206.738342 L 919.167847 161.71814 L 946.308838 140.29541 L 997.61084 140.29541 L 1035.38269 196.429626 L 1018.469849 254.416199 L 965.637634 321.422852 L 921.825562 378.201538 L 859.006714 462.765259 L 819.785278 530.41626 L 823.409424 535.812073 L 832.75177 534.92627 L 974.657776 504.724915 L 1051.328979 490.872559 L 1142.818848 475.167786 L 1184.214844 494.496582 L 1188.724854 514.147644 L 1172.456421 554.335693 L 1074.604126 578.496765 L 959.838989 601.449829 L 788.939636 641.879272 L 786.845764 643.409485 L 789.261841 646.389343 L 866.255127 653.637634 L 899.194702 655.409424 L 979.812134 655.409424 L 1129.932861 666.604187 L 1169.154419 692.537109 L 1192.671265 724.268677 L 1188.724854 748.429688 L 1128.322144 779.194641 L 1046.818848 759.865845 L 856.590759 714.604126 L 791.355774 698.335754 L 782.335693 698.335754 L 782.335693 703.731567 L 836.69812 756.885986 L 936.322205 846.845581 L 1061.073975 962.81897 L 1067.436279 991.490112 L 1051.409424 1014.120911 L 1034.496704 1011.704712 L 924.885986 929.234924 L 882.604126 892.107544 L 786.845764 811.48999 L 780.483276 811.48999 L 780.483276 819.946289 L 802.550415 852.241699 L 919.087341 1027.409424 L 925.127625 1081.127686 L 916.671204 1098.604126 L 886.469849 1109.154419 L 853.288696 1103.114136 L 785.073914 1007.355835 L 714.684631 899.516785 L 657.906067 802.872498 L 650.979858 806.81897 L 617.476624 1167.704834 L 601.771851 1186.147705 L 565.530212 1200 L 535.328857 1177.046997 L 519.302124 1139.919556 L 535.328857 1066.550537 L 554.657776 970.792053 L 570.362488 894.68457 L 584.536926 800.134277 L 592.993347 768.724976 L 592.429626 766.630859 L 585.503479 767.516968 L 514.22821 865.369263 L 405.825531 1011.865906 L 320.053711 1103.677979 L 299.516815 1111.812256 L 263.919525 1093.369263 L 267.221497 1060.429688 L 287.114136 1031.114136 L 405.825531 880.107361 L 477.422913 786.52356 L 523.651062 732.483276 L 523.328918 724.671265 L 520.590698 724.671265 L 205.288605 929.395935 L 149.154434 936.644409 L 124.993355 914.01355 L 127.973183 876.885986 L 139.409409 864.80542 L 234.201385 799.570435 L 233.879227 799.8927 Z</Geometry>
             <Geometry x:Key="OpenAiIconGeometry">M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z</Geometry>
             <SolidColorBrush x:Key="ClaudeBrandBrush" Color="#d97757"/>
+
+            <!-- Supermodel wordmark (inlined from supermodel.svg) -->
+            <DrawingImage x:Key="SupermodelIcon">
+                <DrawingImage.Drawing>
+                    <DrawingGroup>
+                        <GeometryDrawing Brush="#61B8BC">
+                            <GeometryDrawing.Geometry>
+                                <PathGeometry FillRule="EvenOdd" Figures="M90.5 61.6124C76.4375 73.9694 60.3419 78.5 45.2554 78.5C30.169 78.5 12.3614 73.1122 0.5 61.6011V17.4458C12.1168 6.5 30.391 0.5 45.4887 0.5C63.27 0.5 79.3723 7.47959 90.4887 17.4458V61.6124H90.5ZM88.6882 39.4553C78.2923 23.3824 60.3983 16.2959 45.2554 16.2959C30.1126 16.2959 13.9515 22.4008 2.056 39.4444C13.0382 55.19 27.4 63.0085 45.2554 62.5944C68.1297 62.0639 78.1495 52.4184 88.6882 39.4553ZM45.2554 16.8475C32.9756 16.8475 22.8888 27.1879 22.7554 39.4388C34.8765 39.4162 45.2554 29.6429 45.2554 16.8475C45.2554 29.6429 55.6344 39.4162 67.7554 39.4388C67.6202 27.0216 57.6141 16.8475 45.2554 16.8475ZM45.2554 62.0639C45.2554 48.9898 34.8765 39.4614 22.7554 39.4388C22.8888 51.6897 32.9756 62.0639 45.2554 62.0639C57.5352 62.0639 67.622 51.6897 67.7554 39.4388C55.6344 39.4614 45.2554 48.9898 45.2554 62.0639Z"/>
+                            </GeometryDrawing.Geometry>
+                        </GeometryDrawing>
+                        <GeometryDrawing Brush="White">
+                            <GeometryDrawing.Geometry>
+                                <PathGeometry FillRule="EvenOdd" Figures="M141.587 6.5C149.129 6.5 155.226 8.67281 160.307 12.6664L160.513 12.8291V25.9152L159.486 24.213C154.693 16.2765 147.808 12.7404 140.23 12.7403C134.79 12.7403 129.469 15.9092 129.469 21.7141C129.469 23.8774 130.048 25.6892 131.318 27.2592C132.598 28.8411 134.611 30.2184 137.55 31.4434L149.766 36.5109C153.951 38.2279 157.187 40.5259 159.376 43.4242C161.569 46.3276 162.686 49.8005 162.686 53.817C162.686 59.393 160.448 64.0803 156.566 67.3659C152.691 70.6458 147.214 72.5 140.773 72.5C131.781 72.5 124.836 69.7904 119.825 64.5934L119.693 64.4571L119.676 64.269L118.5 51.1079L119.527 50.7877C125.887 61.437 133.695 66.1708 142.221 66.1709C145.878 66.1709 148.837 65.1763 150.874 63.4269C152.902 61.6845 154.069 59.1484 154.069 55.9514C154.069 53.7029 153.423 51.6173 152.018 49.7723C150.608 47.9221 148.41 46.285 145.263 44.9785L133.593 40.2671L133.588 40.265C129.229 38.4618 126.081 36.2323 124.025 33.508C121.964 30.7765 121.032 27.59 121.032 23.9372C121.032 18.7578 123.16 14.3831 126.813 11.3107C130.461 8.24391 135.597 6.50001 141.587 6.5Z M513.906 6.5C533.503 6.5 547.133 20.6288 547.133 39.5C547.133 58.3712 533.503 72.5 513.906 72.5C494.306 72.4998 480.77 58.3691 480.77 39.5C480.77 20.6309 494.306 6.50023 513.906 6.5ZM513.906 12.6505C507.351 12.6506 501.507 15.0412 497.298 19.566C493.087 24.0936 490.473 30.8021 490.473 39.5C490.473 48.1979 493.087 54.9064 497.298 59.434C501.507 63.9588 507.351 66.3494 513.906 66.3495C520.461 66.3495 526.305 63.959 530.514 59.434C534.725 54.9064 537.339 48.1979 537.339 39.5C537.339 30.8021 534.725 24.0936 530.514 19.566C526.305 15.041 520.461 12.6505 513.906 12.6505Z M186.482 8.68824C184.745 11.0687 183.925 12.1974 183.522 13.0214C183.152 13.7774 183.146 14.2428 183.146 15.3998V47.414C183.146 53.2288 184.814 57.8205 187.763 60.9534C190.707 64.0809 194.985 65.8148 200.334 65.8148C205.542 65.8148 209.705 64.0841 212.571 60.9587C215.444 57.8262 217.068 53.2325 217.068 47.414V15.2212C217.068 14.0625 217.062 13.6043 216.687 12.8756C216.275 12.0765 215.436 10.9944 213.651 8.70197L212.976 7.83344L227.303 7.83344L226.78 8.65971C225.272 11.0389 224.558 12.1682 224.207 12.995C223.88 13.7626 223.876 14.2413 223.876 15.3998V46.8804C223.876 55.0221 221.632 61.442 217.365 65.8286C213.095 70.219 206.87 72.4989 199.066 72.4989C191.221 72.4989 184.952 70.2651 180.646 65.9089C176.344 61.5551 174.077 55.1559 174.077 46.9692V15.2212C174.077 14.0609 174.071 13.5863 173.748 12.8439C173.398 12.0417 172.686 10.9582 171.178 8.6671L170.628 7.83344L187.107 7.83344L186.482 8.68824Z M262.479 7.83344C269.048 7.83344 274.368 9.59393 278.055 12.6759C281.75 15.7646 283.759 20.1431 283.759 25.2707C283.759 30.3981 281.75 34.7767 278.055 37.8654C274.368 40.9473 269.048 42.7079 262.479 42.7079H249.455V63.7766C249.455 64.9358 249.462 65.3969 249.829 66.1276C250.23 66.927 251.048 68.0091 252.786 70.3012L253.441 71.1655H236.958L237.482 70.3392C238.99 67.9599 239.703 66.8297 240.054 66.0029C240.381 65.2354 240.386 64.7574 240.386 63.5991V15.2212C240.386 14.0609 240.38 13.5863 240.057 12.8439C239.707 12.0418 238.996 10.958 237.488 8.6671L236.937 7.83344L262.479 7.83344ZM249.455 37.0909H260.941C265.452 37.0909 268.763 35.832 270.943 33.7637C273.121 31.6963 274.237 28.7582 274.237 25.2707C274.237 21.7831 273.121 18.845 270.943 16.7776C268.763 14.7093 265.452 13.4504 260.941 13.4504L249.455 13.4504V37.0909Z M333.574 19.6125L332.638 18.7228C329.937 16.1576 328.162 14.923 326.718 14.3178C325.294 13.7215 324.154 13.7177 322.613 13.7177L303.073 13.7177V34.6893L318.903 34.6893C320.358 34.6893 321.406 34.6856 322.647 34.293C323.895 33.8982 325.376 33.0961 327.619 31.4212L328.506 30.7587V44.5052L327.619 43.8427C325.376 42.1677 323.895 41.3646 322.647 40.9697C321.406 40.5772 320.358 40.5735 318.903 40.5735H303.073V65.2813H321.075C322.789 65.2813 324.051 65.2778 325.798 64.5765C327.574 63.8636 329.875 62.4171 333.577 59.4456L334.658 58.5781L333.026 70.6953L332.964 71.1655L290.575 71.1655L291.099 70.3392C292.607 67.9599 293.32 66.8297 293.672 66.0029C293.998 65.2355 294.003 64.7573 294.003 63.5991V15.2212C294.003 14.0609 293.998 13.5863 293.674 12.8439C293.324 12.0417 292.613 10.9581 291.104 8.6671L290.555 7.83344L333.574 7.83344V19.6125Z M367.955 7.83344C374.602 7.83347 380.009 9.45422 383.766 12.398C387.536 15.3523 389.597 19.6025 389.597 24.7371C389.597 29.2752 387.959 33.1093 384.96 35.9635C382.152 38.6362 378.182 40.4182 373.328 41.1504L390.38 62.3714L391.493 63.7291C392.477 64.9221 393.114 65.6683 393.813 66.396C394.746 67.3675 395.792 68.3088 397.925 70.2262L398.971 71.1655H386.058L362.614 41.5519H355.293V63.6879C355.293 64.8928 355.3 65.3627 355.711 66.0948C356.164 66.9021 357.087 67.9827 359.055 70.2758L359.818 71.1655H342.795L343.32 70.3392C344.827 67.9599 345.54 66.8297 345.892 66.0029C346.218 65.2354 346.223 64.7574 346.223 63.5991V15.2212C346.223 14.0609 346.218 13.5863 345.894 12.8439C345.544 12.0418 344.833 10.9581 343.324 8.6671L342.775 7.83344L367.955 7.83344ZM355.293 36.2013H366.778C371.083 36.2013 374.399 35.1546 376.631 33.2449C378.852 31.3446 380.074 28.527 380.074 24.8258C380.074 21.1247 378.852 18.307 376.631 16.4068C374.399 14.4971 371.083 13.4504 366.778 13.4504L355.293 13.4504V36.2013Z M437.807 42.0697L460.68 7.83344L471.913 7.83344L471.409 8.65337C469.947 11.0323 469.255 12.1622 468.913 12.9897C468.596 13.7598 468.592 14.2411 468.592 15.3998V63.7766C468.592 64.9371 468.596 65.4146 468.911 66.1593C469.251 66.9621 469.941 68.0464 471.404 70.3371L471.932 71.1655H454.931L455.663 70.2832C457.674 67.8579 458.625 66.7072 459.092 65.873C459.516 65.1159 459.521 64.6636 459.521 63.5104V20.7061L436.36 55.8827L413.289 20.7938V63.7766C413.289 64.9357 413.296 65.3945 413.671 66.1234C414.083 66.9224 414.922 68.0039 416.706 70.2959L417.383 71.1655L403.236 71.1655L403.76 70.3392C405.268 67.9599 405.981 66.8297 406.332 66.0029C406.659 65.2354 406.664 64.7574 406.664 63.5991V15.2212C406.664 14.0609 406.658 13.5863 406.334 12.8439C405.985 12.0418 405.273 10.9581 403.764 8.6671L403.215 7.83344L414.845 7.83344L437.807 42.0697Z M580.646 7.83344C589.81 7.83344 598.03 10.6253 603.965 16.0031C609.907 21.3866 613.511 29.3181 613.511 39.4989C613.511 49.6799 609.907 57.6123 603.965 62.9958C598.03 68.3734 589.81 71.1655 580.646 71.1655H555.849L556.373 70.3392C557.881 67.9599 558.594 66.8297 558.945 66.0029C559.272 65.2355 559.277 64.7574 559.277 63.5991V15.2212C559.277 14.0609 559.271 13.5863 558.947 12.8439C558.598 12.0417 557.886 10.9581 556.377 8.6671L555.828 7.83344L580.646 7.83344ZM568.346 65.37H579.198C585.729 65.37 591.874 63.2321 596.384 58.9532C600.888 54.679 603.808 48.2235 603.808 39.4989C603.808 30.7296 600.888 24.2755 596.385 20.013C591.876 15.7454 585.73 13.6279 579.198 13.6279L568.346 13.6279V65.37Z M665.194 19.6125L664.256 18.7228C661.555 16.1577 659.781 14.9231 658.337 14.3178C656.913 13.7213 655.772 13.7177 654.232 13.7177L634.691 13.7177V34.6893H650.521C651.976 34.6893 653.025 34.6857 654.266 34.293C655.514 33.8982 656.994 33.0958 659.237 31.4212L660.125 30.7587V44.5052L659.237 43.8427C656.994 42.1678 655.514 41.3646 654.266 40.9697C653.025 40.577 651.976 40.5735 650.521 40.5735H634.691V65.2813H652.693C654.407 65.2813 655.669 65.2778 657.417 64.5765C659.193 63.8636 661.494 62.4175 665.196 59.4456L666.276 58.5781L664.582 71.1655L622.194 71.1655L622.718 70.3392C624.225 67.9599 624.938 66.8297 625.29 66.0029C625.616 65.2354 625.621 64.7574 625.621 63.5991V15.2212C625.621 14.0609 625.616 13.5863 625.292 12.8439C624.942 12.0418 624.232 10.958 622.723 8.6671L622.173 7.83344L665.194 7.83344V19.6125Z M689.902 8.66499C688.348 11.0444 687.614 12.1742 687.252 13.0003C686.916 13.7655 686.912 14.2415 686.912 15.3998V65.1037H703.556C705.361 65.1037 706.708 65.0998 708.517 64.3261C710.355 63.54 712.699 61.944 716.4 58.6627L717.5 57.6874L715.811 71.1655H674.414L674.938 70.3392C676.445 67.9599 677.159 66.8297 677.511 66.0029C677.837 65.2355 677.842 64.7573 677.842 63.5991V15.2212C677.842 14.061 677.837 13.5863 677.513 12.8439C677.163 12.0417 676.452 10.9582 674.943 8.6671L674.394 7.83344L690.445 7.83344L689.902 8.66499Z"/>
+                            </GeometryDrawing.Geometry>
+                        </GeometryDrawing>
+                    </DrawingGroup>
+                </DrawingImage.Drawing>
+            </DrawingImage>
 
             <!-- Tool option item: icon + name, used by the TOOL ComboBox -->
             <Style x:Key="ToolIconStyle" TargetType="Path">
@@ -577,7 +595,7 @@
 
             <!-- ============ Markdig.Wpf dark theme ============ -->
             <Style x:Key="{x:Static md:Styles.DocumentStyleKey}" TargetType="FlowDocument">
-                <Setter Property="FontFamily" Value="Segoe UI"/>
+                <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI"/>
                 <Setter Property="FontSize" Value="13"/>
                 <Setter Property="Foreground" Value="{StaticResource FgPrimary}"/>
                 <Setter Property="Background" Value="{StaticResource BgSurface}"/>
@@ -615,13 +633,13 @@
             <Style x:Key="{x:Static md:Styles.Heading6StyleKey}" TargetType="Paragraph"
                    BasedOn="{StaticResource {x:Static md:Styles.Heading4StyleKey}}"/>
             <Style x:Key="{x:Static md:Styles.CodeStyleKey}" TargetType="Run">
-                <Setter Property="FontFamily" Value="Cascadia Mono, Consolas"/>
+                <Setter Property="FontFamily" Value="Cascadia Code, Cascadia Mono, Consolas"/>
                 <Setter Property="FontSize" Value="12.5"/>
                 <Setter Property="Background" Value="#2e2e33"/>
                 <Setter Property="Foreground" Value="#f3c88a"/>
             </Style>
             <Style x:Key="{x:Static md:Styles.CodeBlockStyleKey}" TargetType="Paragraph">
-                <Setter Property="FontFamily" Value="Cascadia Mono, Consolas"/>
+                <Setter Property="FontFamily" Value="Cascadia Code, Cascadia Mono, Consolas"/>
                 <Setter Property="FontSize" Value="12.5"/>
                 <Setter Property="Background" Value="#17171a"/>
                 <Setter Property="Foreground" Value="#e4e4e6"/>
@@ -753,22 +771,25 @@
                               VerticalAlignment="Center"
                               IsChecked="{Binding RalphEnabled}"
                               ToolTip="When off, each Start does exactly one pass (no looping). Max Iter is ignored."/>
-                    <Label Content="MAX ITER"/>
-                    <Border BorderBrush="{StaticResource Border1}" BorderThickness="1"
-                            CornerRadius="4" Background="{StaticResource BgInput}"
-                            Height="26" IsEnabled="{Binding RalphEnabled}">
-                        <StackPanel Orientation="Horizontal">
-                            <RepeatButton Style="{StaticResource StepperButton}"
-                                          Click="MaxIterDown_Click" Content="−"/>
-                            <TextBox x:Name="MaxIterBox" Width="36"
-                                     Background="Transparent" BorderThickness="0"
-                                     Text="{Binding MaxIterations, UpdateSourceTrigger=LostFocus}"
-                                     VerticalContentAlignment="Center"
-                                     HorizontalContentAlignment="Center"/>
-                            <RepeatButton Style="{StaticResource StepperButton}"
-                                          Click="MaxIterUp_Click" Content="+"/>
-                        </StackPanel>
-                    </Border>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                                Visibility="{Binding RalphEnabled, Converter={StaticResource BoolToVis}}">
+                        <Label Content="MAX ITER"/>
+                        <Border BorderBrush="{StaticResource Border1}" BorderThickness="1"
+                                CornerRadius="4" Background="{StaticResource BgInput}"
+                                Height="26">
+                            <StackPanel Orientation="Horizontal">
+                                <RepeatButton Style="{StaticResource StepperButton}"
+                                              Click="MaxIterDown_Click" Content="−"/>
+                                <TextBox x:Name="MaxIterBox" Width="36"
+                                         Background="Transparent" BorderThickness="0"
+                                         Text="{Binding MaxIterations, UpdateSourceTrigger=LostFocus}"
+                                         VerticalContentAlignment="Center"
+                                         HorizontalContentAlignment="Center"/>
+                                <RepeatButton Style="{StaticResource StepperButton}"
+                                              Click="MaxIterUp_Click" Content="+"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
                 </StackPanel>
 
                 <CheckBox Margin="4,0,8,0" VerticalAlignment="Center"
@@ -991,13 +1012,16 @@
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <Ellipse Grid.Column="0" Width="7" Height="7" Fill="#6a9955" Margin="0,0,7,0"
                                          VerticalAlignment="Center"
                                          Visibility="{Binding IsRunning, Converter={StaticResource BoolToVis}}"/>
-                                <Grid Grid.Column="1" VerticalAlignment="Center">
+                                <Path Grid.Column="1" Style="{StaticResource ToolIconStyle}"
+                                      VerticalAlignment="Center"/>
+                                <Grid Grid.Column="2" VerticalAlignment="Center">
                                     <TextBlock Text="{Binding Name}"
                                                Foreground="{StaticResource FgPrimary}"
                                                VerticalAlignment="Center"
@@ -1039,7 +1063,7 @@
                                         </TextBox.Style>
                                     </TextBox>
                                 </Grid>
-                                <Button Grid.Column="2" Margin="6,0,0,0" Width="16" Height="16"
+                                <Button Grid.Column="3" Margin="6,0,0,0" Width="16" Height="16"
                                         Padding="0"
                                         Background="Transparent" BorderThickness="0"
                                         Cursor="Hand"
@@ -1102,6 +1126,61 @@
                         </Border>
                     </DockPanel>
                 </Border>
+                <Border DockPanel.Dock="Bottom"
+                        Background="{StaticResource BgSurface}"
+                        BorderBrush="{StaticResource Border1}" BorderThickness="0,1,0,0"
+                        Padding="8">
+                    <DockPanel LastChildFill="True">
+                        <ItemsControl DockPanel.Dock="Top"
+                                      ItemsSource="{Binding QueuedMessages}"
+                                      Visibility="{Binding HasQueuedMessages, Converter={StaticResource BoolToVis}}"
+                                      Margin="0,0,0,6">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="#2a2a2d"
+                                            BorderBrush="{StaticResource Border1}" BorderThickness="1"
+                                            CornerRadius="3" Padding="6,3" Margin="0,2,0,0">
+                                        <DockPanel LastChildFill="True">
+                                            <Button DockPanel.Dock="Right" Content="✕"
+                                                    Tag="{Binding}"
+                                                    Click="RemoveQueued_Click"
+                                                    Style="{StaticResource FlatButton}"
+                                                    MinWidth="0" Padding="6,0"
+                                                    ToolTip="Remove from queue"/>
+                                            <TextBlock Text="{Binding Text}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{StaticResource FgPrimary}"
+                                                       FontFamily="Cascadia Code, Cascadia Mono, Consolas"
+                                                       FontSize="12"/>
+                                        </DockPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <DockPanel LastChildFill="True">
+                            <Button DockPanel.Dock="Right" Content="Send"
+                                    Style="{StaticResource FlatButton}"
+                                    MinWidth="60" Margin="6,0,0,0"
+                                    Click="ChatSend_Click"/>
+                            <TextBox x:Name="ChatInputBox"
+                                     Text="{Binding ChatInput, UpdateSourceTrigger=PropertyChanged}"
+                                     AcceptsReturn="True" TextWrapping="Wrap"
+                                     MaxHeight="90" VerticalScrollBarVisibility="Auto"
+                                     TextChanged="ChatInputBox_TextChanged"
+                                     SelectionChanged="ChatInputBox_SelectionChanged"
+                                     PreviewKeyDown="ChatInputBox_PreviewKeyDown"
+                                     LostFocus="ChatInputBox_LostFocus"
+                                     MouseMove="ChatInputBox_MouseMove"
+                                     MouseLeave="ChatInputBox_MouseLeave"
+                                     Background="{StaticResource BgInput}"
+                                     Foreground="{StaticResource FgPrimary}"
+                                     BorderBrush="{StaticResource Border1}" BorderThickness="1"
+                                     FontFamily="Cascadia Code, Cascadia Mono, Consolas" FontSize="12"
+                                     Padding="8,6"/>
+                        </DockPanel>
+                    </DockPanel>
+                </Border>
                 <Border Style="{StaticResource PaneFrame}">
                     <Grid>
                             <TextBox x:Name="PromptBox"
@@ -1109,7 +1188,7 @@
                                      AcceptsReturn="True" AcceptsTab="True"
                                      TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                                      BorderThickness="0" Background="Transparent"
-                                     FontFamily="Cascadia Mono, Consolas" FontSize="13" Padding="10,8"
+                                     FontFamily="Cascadia Code, Cascadia Mono, Consolas" FontSize="13" Padding="10,8"
                                      TextChanged="PromptBox_TextChanged"
                                      SelectionChanged="PromptBox_SelectionChanged"
                                      PreviewKeyDown="PromptBox_PreviewKeyDown"
@@ -1160,7 +1239,7 @@
                                         <ListBox.ItemTemplate>
                                             <DataTemplate>
                                                 <TextBlock Text="{Binding}"
-                                                           FontFamily="Cascadia Mono, Consolas"
+                                                           FontFamily="Cascadia Code, Cascadia Mono, Consolas"
                                                            FontSize="12"
                                                            TextTrimming="CharacterEllipsis"/>
                                             </DataTemplate>
@@ -1180,7 +1259,7 @@
                                         CornerRadius="3" Padding="8,4">
                                     <TextBlock x:Name="MentionTooltipText"
                                                Foreground="{StaticResource FgPrimary}"
-                                               FontFamily="Cascadia Mono, Consolas" FontSize="11"/>
+                                               FontFamily="Cascadia Code, Cascadia Mono, Consolas" FontSize="11"/>
                                 </Border>
                             </Popup>
                         </Grid>
@@ -1213,7 +1292,7 @@
                                      TextWrapping="NoWrap"
                                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                                      BorderThickness="0" Background="Transparent"
-                                     FontFamily="Cascadia Mono, Consolas" FontSize="13" Padding="10,8"/>
+                                     FontFamily="Cascadia Code, Cascadia Mono, Consolas" FontSize="13" Padding="10,8"/>
                         </TabItem>
                         <TabItem Header="Markdown">
                             <md:MarkdownViewer x:Name="TasksMarkdown"
@@ -1237,7 +1316,8 @@
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
                                 VerticalAlignment="Top" Margin="8,0,0,0">
                         <TextBlock Text="{Binding IterationLabel}" Foreground="{StaticResource FgPrimary}"
-                                   FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                   FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,10,0"
+                                   Visibility="{Binding RalphEnabled, Converter={StaticResource BoolToVis}}"/>
                         <TextBlock Text="{Binding Status}" Foreground="{StaticResource FgAccent}"
                                    VerticalAlignment="Center" Margin="0,0,12,0"/>
                         <Button Style="{StaticResource PrimaryButton}"
@@ -1280,15 +1360,18 @@
                         <TextBox Width="52" Margin="0,0,10,0"
                                  Text="{Binding TimeoutSeconds, UpdateSourceTrigger=LostFocus}"
                                  VerticalContentAlignment="Center" HorizontalContentAlignment="Center"/>
-                        <Label Content="ITER"/>
-                        <TextBlock Text="{Binding IterationElapsedText}"
-                                   Foreground="{StaticResource FgPrimary}"
-                                   FontFamily="Cascadia Mono, Consolas" VerticalAlignment="Center"
-                                   Margin="0,0,10,0"/>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                                    Visibility="{Binding RalphEnabled, Converter={StaticResource BoolToVis}}">
+                            <Label Content="ITER"/>
+                            <TextBlock Text="{Binding IterationElapsedText}"
+                                       Foreground="{StaticResource FgPrimary}"
+                                       FontFamily="Cascadia Code, Cascadia Mono, Consolas" VerticalAlignment="Center"
+                                       Margin="0,0,10,0"/>
+                        </StackPanel>
                         <Label Content="TOTAL"/>
                         <TextBlock Text="{Binding TotalElapsedText}"
                                    Foreground="{StaticResource FgPrimary}"
-                                   FontFamily="Cascadia Mono, Consolas" VerticalAlignment="Center"/>
+                                   FontFamily="Cascadia Code, Cascadia Mono, Consolas" VerticalAlignment="Center"/>
                     </StackPanel>
 
                     <Border Width="1" Background="{StaticResource Border1}" Margin="0,3,8,3"/>
@@ -1302,7 +1385,7 @@
                         <CheckBox x:Name="AutoScrollBox"
                                   IsChecked="{Binding DataContext.AutoScrollConsole, RelativeSource={RelativeSource AncestorType=Window}}"
                                   VerticalAlignment="Center" Margin="0,0,10,0" Content="Auto-scroll"/>
-                        <Button Content="Clear" Style="{StaticResource FlatButton}"
+                        <Button Content="Clear Session" Style="{StaticResource FlatButton}"
                                 Click="ClearConsole_Click" MinWidth="60"/>
                     </StackPanel>
 
@@ -1314,7 +1397,7 @@
                              IsReadOnly="True" IsDocumentEnabled="True"
                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                              BorderThickness="0" Background="Transparent"
-                             FontFamily="Cascadia Mono, Consolas" FontSize="12"
+                             FontFamily="Cascadia Code, Cascadia Mono, Consolas" FontSize="12"
                              Foreground="#d4d4d4" Padding="10,8"
                              Block.LineHeight="16"/>
             </Border>
@@ -1327,6 +1410,13 @@
                 CornerRadius="4" Padding="10,4"
                 DataContext="{Binding SelectedProject.SelectedConversation}">
             <DockPanel LastChildFill="False">
+                <TextBlock DockPanel.Dock="Left" Text="just code"
+                           Foreground="#ffd200"
+                           FontFamily="Poppins SemiBold, Segoe UI Variable, Segoe UI"
+                           FontWeight="SemiBold" FontSize="16"
+                           VerticalAlignment="Center" Margin="2,0,14,0"
+                           TextOptions.TextRenderingMode="ClearType"
+                           TextOptions.TextFormattingMode="Ideal"/>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
                             Visibility="{Binding HasSession, Converter={StaticResource BoolToVis}}">
                     <TextBlock Text="SESSION" Foreground="{StaticResource FgDim}"
@@ -1334,19 +1424,95 @@
                                VerticalAlignment="Center" Margin="0,0,6,0"/>
                     <TextBlock Text="{Binding CurrentSessionId}"
                                Foreground="{StaticResource FgAccent}"
-                               FontFamily="Cascadia Mono, Consolas" FontSize="11"
+                               FontFamily="Cascadia Code, Cascadia Mono, Consolas" FontSize="11"
                                VerticalAlignment="Center"
                                ToolTip="{Binding CurrentSessionId}"
                                TextTrimming="CharacterEllipsis" MaxWidth="360"/>
                 </StackPanel>
 
+                <!-- Loop-health pills: tasks, circuit state, exit status -->
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                    <Border Background="#183028" BorderBrush="#2f5849" BorderThickness="1"
+                            CornerRadius="3" Padding="6,2" Margin="0,0,6,0"
+                            Visibility="{Binding TaskStatsVisible, Converter={StaticResource BoolToVis}}"
+                            ToolTip="Open and completed checkboxes in tasks.md">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="TASKS" Foreground="{StaticResource FgDim}"
+                                       FontSize="10" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Foreground="#8bd49e"
+                                       FontFamily="Cascadia Code, Cascadia Mono, Consolas" FontSize="11"
+                                       VerticalAlignment="Center">
+                                <Run Text="{Binding OpenTasks, Mode=OneWay}"/><Run Text=" open · "/><Run Text="{Binding ClosedTasks, Mode=OneWay}"/><Run Text=" done"/>
+                            </TextBlock>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="#4a3400" BorderBrush="#6a4a00" BorderThickness="1"
+                            CornerRadius="3" Padding="6,2" Margin="0,0,6,0"
+                            Visibility="{Binding IsCircuitHalfOpen, Converter={StaticResource BoolToVis}}"
+                            ToolTip="Two iterations with no file changes — next iteration is nudged to land concrete edits.">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="⚠" Foreground="#ffd596" FontSize="11"
+                                       VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock Text="PROGRESS STALLED" Foreground="#ffd596"
+                                       FontSize="10" FontWeight="SemiBold"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="#5a1f1f" BorderBrush="#a03838" BorderThickness="1"
+                            CornerRadius="3" Padding="6,2" Margin="0,0,6,0"
+                            Visibility="{Binding IsCircuitOpen, Converter={StaticResource BoolToVis}}"
+                            ToolTip="Three iterations with no file changes — loop paused. Edit the prompt or fix blockers and press Start to resume.">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="⛔" Foreground="#ffb4b4" FontSize="11"
+                                       VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock Text="CIRCUIT OPEN" Foreground="#ffb4b4"
+                                       FontSize="10" FontWeight="SemiBold"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="#1a3a2a" BorderBrush="#3a6f50" BorderThickness="1"
+                            CornerRadius="3" Padding="6,2" Margin="0,0,6,0"
+                            Visibility="{Binding ExitStatusVisible, Converter={StaticResource BoolToVis}}"
+                            ToolTip="Model emitted EXIT_SIGNAL=true — loop ended early.">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="✓" Foreground="#9ce7b0" FontSize="11"
+                                       VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock Text="{Binding ExitStatus}" Foreground="#9ce7b0"
+                                       FontSize="10" FontWeight="SemiBold"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="TIME" Foreground="{StaticResource FgDim}"
+                               FontSize="10" FontWeight="SemiBold"
+                               VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBlock Text="{Binding TotalElapsedText, FallbackValue='--:--', TargetNullValue='--:--'}"
+                               Foreground="{StaticResource FgPrimary}"
+                               FontFamily="Cascadia Code, Cascadia Mono, Consolas" FontSize="11"
+                               VerticalAlignment="Center"/>
+                    <TextBlock Text="·" Foreground="{StaticResource FgDim}"
+                               FontSize="11" VerticalAlignment="Center" Margin="8,0"/>
+                    <TextBlock Text="TOOLS" Foreground="{StaticResource FgDim}"
+                               FontSize="10" FontWeight="SemiBold"
+                               VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBlock Text="{Binding ToolCallCount, FallbackValue='0', TargetNullValue='0'}"
+                               Foreground="{StaticResource FgPrimary}"
+                               FontFamily="Cascadia Code, Cascadia Mono, Consolas" FontSize="11"
+                               VerticalAlignment="Center"/>
+                    <TextBlock Text="·" Foreground="{StaticResource FgDim}"
+                               FontSize="11" VerticalAlignment="Center" Margin="8,0"/>
                     <TextBlock Text="TOKENS" Foreground="{StaticResource FgDim}"
                                FontSize="10" FontWeight="SemiBold"
                                VerticalAlignment="Center" Margin="0,0,6,0"/>
                     <TextBlock Text="{Binding TokenSummary, FallbackValue='—', TargetNullValue='—'}"
                                Foreground="{StaticResource FgPrimary}"
-                               FontFamily="Cascadia Mono, Consolas" FontSize="11"
+                               FontFamily="Cascadia Code, Cascadia Mono, Consolas" FontSize="11"
                                VerticalAlignment="Center"/>
                 </StackPanel>
             </DockPanel>

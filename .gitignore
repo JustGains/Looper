@@ -60,5 +60,5 @@ coverage*.info
 *.coverage
 *.coveragexml
 
-# Looper runtime state (per-working-dir; never check in)
+# JustCode runtime state (per-working-dir; never check in)
 .looper/

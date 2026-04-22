@@ -1,8 +1,8 @@
 using System.IO;
 using System.Text.Json;
-using Looper.Models;
+using JustCode.Models;
 
-namespace Looper.Services;
+namespace JustCode.Services;
 
 /// Per-project + per-conversation storage under `<workingDir>/.looper/`.
 /// Layout:

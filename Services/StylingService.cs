@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Media;
 
-namespace Looper.Services;
+namespace JustCode.Services;
 
 public sealed class StylingRule
 {
@@ -78,8 +78,8 @@ public static class StylingDefaults
         new StylingRule { Name = "iteration separator",
             Pattern = @"^── iteration \d+/\d+ ──$",
             Foreground = "#c586c0", FontWeight = "Bold" },
-        new StylingRule { Name = "looper info",
-            Pattern = @"^\[looper\][^\r\n]*",
+        new StylingRule { Name = "justcode info",
+            Pattern = @"^\[justcode\][^\r\n]*",
             Foreground = "#dcdcaa" },
         new StylingRule { Name = "claude session init",
             Pattern = @"^\[session\][^\r\n]*",

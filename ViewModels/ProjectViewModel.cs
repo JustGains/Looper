@@ -3,10 +3,10 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
-using Looper.Models;
-using Looper.Services;
+using JustCode.Models;
+using JustCode.Services;
 
-namespace Looper.ViewModels;
+namespace JustCode.ViewModels;
 
 public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
 {
