@@ -7,6 +7,7 @@ public enum CliTool
 {
     ClaudeCode,
     Codex,
+    Pi,
 }
 
 public sealed class LoopSettings
@@ -20,6 +21,16 @@ public sealed class LoopSettings
     public string? ClaudeEffort { get; set; }
     public string? CodexModel { get; set; }
     public string? CodexEffort { get; set; }
+    public string? PiModel { get; set; }
+    public string? PiThinking { get; set; }
+    /// Favourited models per-tool (starred) so they float to the top of the
+    /// picker and survive app restarts.
+    public List<string> ClaudeFavoriteModels { get; set; } = new();
+    public List<string> CodexFavoriteModels { get; set; } = new();
+    public List<string> PiFavoriteModels { get; set; } = new();
+    /// Cached list of pi models most recently returned by `pi --list-models`
+    /// so the UI can populate without blocking on a subprocess each launch.
+    public List<string> PiModelCache { get; set; } = new();
 
     // UI
     public int TasksTabIndex { get; set; } = 1;

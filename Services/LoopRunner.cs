@@ -11,7 +11,7 @@ public sealed class LoopRunner
     private System.Timers.Timer? _inactivityTimer;
     private bool _inactivityTripped;
     private readonly object _lock = new();
-    private StreamJsonFormatter? _formatter;
+    private IIterationFormatter? _formatter;
     private string? _capturedSessionId;
 
     public event EventHandler<string>? Output;
@@ -59,7 +59,7 @@ public sealed class LoopRunner
             Output?.Invoke(this, chunk);
     }
 
-    public async Task RunAsync(Func<string> promptProvider, Func<string?> tryDequeueQueued, ConversationSettings settings, string workingDirectory, string tasksRelativePath, string? initialSessionId = null, bool chatOnly = false)
+    public async Task RunAsync(Func<string> promptProvider, Func<string?> tryDequeueQueued, ConversationSettings settings, string workingDirectory, string tasksRelativePath, string? initialSessionId = null, bool chatOnly = false, Func<IReadOnlyList<string>>? enabledSkillPathsProvider = null)
     {
         if (IsRunning) return;
 
@@ -114,11 +114,16 @@ public sealed class LoopRunner
                     currentPrompt = promptProvider();
                     wrapped = BuildWrappedPrompt(
                         currentPrompt, iter, effectiveMax, tasksRelativePath,
-                        stats, carryGuidance, circuit.State);
+                        stats, carryGuidance, circuit.State, settings);
                 }
                 carryGuidance.Clear();
 
-                _formatter = settings.Tool == CliTool.ClaudeCode ? new StreamJsonFormatter() : null;
+                _formatter = settings.Tool switch
+                {
+                    CliTool.ClaudeCode => new StreamJsonFormatter(),
+                    CliTool.Pi => new PiJsonFormatter(),
+                    _ => null,
+                };
                 if (_formatter != null)
                 {
                     _formatter.SessionIdCaptured += (_, sid) =>
@@ -156,10 +161,29 @@ public sealed class LoopRunner
                 _inactivityTripped = false;
                 StartInactivity(settings.TimeoutSeconds);
                 int exitCode;
-                var continueSession = settings.KeepContext && (iter > 1 || isQueued || !string.IsNullOrEmpty(_capturedSessionId));
+                // Pending fork (one-shot): iter 1 forks from the parent's
+                // session id. Once the run captures a new session id, the
+                // VM clears PendingForkFromSessionId and subsequent iters
+                // behave like a normal resume.
+                bool doFork = !string.IsNullOrEmpty(settings.PendingForkFromSessionId)
+                              && string.IsNullOrEmpty(_capturedSessionId);
+                var forkFromId = doFork ? settings.PendingForkFromSessionId : null;
+                // Only resume when we have *this conversation's* own captured
+                // session id. Falling back to the CLI's "most recent session"
+                // (via `--continue` / `exec resume --last`) would silently hop
+                // into another conversation's session — so never do that.
+                var continueSession = doFork
+                    || (settings.KeepContext && !string.IsNullOrEmpty(_capturedSessionId));
+                var runSessionId = forkFromId ?? _capturedSessionId;
                 try
                 {
-                    exitCode = await _runner.RunAsync(settings, workingDirectory, wrapped, continueSession, _capturedSessionId, cts.Token);
+                    // Only Pi uses --skill; other tools receive null so the
+                    // runner keeps its existing arg list untouched.
+                    var skillPaths = (settings.Tool == CliTool.Pi)
+                        ? enabledSkillPathsProvider?.Invoke()
+                        : null;
+                    exitCode = await _runner.RunAsync(settings, workingDirectory, wrapped,
+                        continueSession, runSessionId, cts.Token, skillPaths, fork: doFork);
                 }
                 finally
                 {
@@ -183,12 +207,17 @@ public sealed class LoopRunner
                 // --- Post-iteration signal collection ---
                 var f = _formatter;
                 bool exitRequested = false;
+                bool fatalError = false;
                 if (f != null)
                 {
                     if (f.IterationExitSignal)
                     {
                         exitRequested = true;
                         ExitSignalReceived?.Invoke(this, f.IterationStatus ?? "COMPLETE");
+                    }
+                    if (f.IterationFatalError)
+                    {
+                        fatalError = true;
                     }
                     if (f.IterationAskedQuestion)
                         carryGuidance.Add("The previous iteration asked a clarifying question. Do NOT ask questions — make reasonable decisions and proceed. If a decision is truly ambiguous, document the assumption in `tasks.md` and continue.");
@@ -219,6 +248,50 @@ public sealed class LoopRunner
                     Output?.Invoke(this, $"[justcode] queued message exited with code {exitCode}\n");
                 else
                     Output?.Invoke(this, $"[justcode] iteration {iter}/{effectiveMax} exited with code {exitCode}\n");
+
+                // Fatal provider error. Some of these (image-dimension limit,
+                // invalid/missing session id, context overflow) can be cleared
+                // by starting a fresh session — the offending content only
+                // lives in the old session's history. For those we clear the
+                // captured id, inject a recovery note, and continue the loop
+                // in a brand-new session. For everything else (auth, rate
+                // limit) a fresh session won't help, so we stop.
+                if (fatalError)
+                {
+                    var msg = f?.IterationFatalErrorMessage ?? "(no error message)";
+                    if (StreamJsonFormatter.IsRecoverableByFreshSession(msg) && !isQueued)
+                    {
+                        var deadId = _capturedSessionId;
+                        _capturedSessionId = null; // next iter starts fresh
+                        // Tell the VM to clear its persisted session id too —
+                        // fire the SessionCaptured event with empty to signal
+                        // reset (the VM accepts null via its clear path).
+                        SessionCaptured?.Invoke(this, "");
+                        Output?.Invoke(this, $"[justcode] provider rejected this turn: {msg}\n");
+                        Output?.Invoke(this, "[justcode] starting a fresh session and reinjecting the most recent task context…\n");
+                        Status?.Invoke(this, "Recovering");
+                        carryGuidance.Add(
+                            "Recovery mode: the previous session was interrupted by a provider error "
+                            + $"(\"{Shorten(msg, 200)}\"). You are now in a BRAND-NEW session with no memory of the "
+                            + "previous turns. The last task-summary block above is your only context from that run. "
+                            + "Do NOT re-ask clarifying questions and do NOT restart the overall task from scratch — "
+                            + "re-read any files you need, consult the task list, and continue the user's work from "
+                            + "where the summary left off.");
+                        // Don't increment iter — retry this slot in the fresh
+                        // session. If the retry also fatals, the circuit will
+                        // eventually trip (consecutive no-progress).
+                        if (!isQueued && circuit.State == CircuitState.Open)
+                        {
+                            Output?.Invoke(this, "[justcode] circuit already open — stopping after recovery attempt.\n");
+                            Status?.Invoke(this, "Circuit open");
+                            return;
+                        }
+                        continue;
+                    }
+                    Output?.Invoke(this, $"[justcode] stopping loop — provider rejected the turn: {msg}\n");
+                    Status?.Invoke(this, "Error");
+                    return;
+                }
 
                 // Early exit on explicit model signal.
                 if (exitRequested)
@@ -287,6 +360,9 @@ public sealed class LoopRunner
         t?.Dispose();
     }
 
+    private static string Shorten(string s, int max)
+        => string.IsNullOrEmpty(s) ? "" : (s.Length <= max ? s : s.Substring(0, max) + "…");
+
     private static TaskStats ReadTaskStats(string workingDirectory, string tasksRelativePath)
     {
         try
@@ -308,7 +384,8 @@ public sealed class LoopRunner
         string tasksRelativePath,
         TaskStats stats,
         IReadOnlyList<string> guidance,
-        CircuitState circuit)
+        CircuitState circuit,
+        ConversationSettings settings)
     {
         var tp = string.IsNullOrWhiteSpace(tasksRelativePath) ? ".looper/tasks.md" : tasksRelativePath.Replace('\\', '/');
 

@@ -6,7 +6,7 @@ namespace JustCode.Services;
 
 /// Parses newline-delimited JSON from `claude --output-format stream-json
 /// --include-partial-messages` into readable console chunks.
-public sealed class StreamJsonFormatter
+public sealed class StreamJsonFormatter : IIterationFormatter
 {
     private string? _activeBlockKind;
     private string? _activeToolName;
@@ -31,6 +31,12 @@ public sealed class StreamJsonFormatter
     public bool IterationAskedQuestion { get; private set; }
     /// Count of `tool_result` blocks that returned `is_error: true`.
     public int IterationToolErrors { get; private set; }
+    /// True if Claude rejected the whole turn (e.g. image too large, invalid
+    /// session id, context overflow). Retrying the same prompt will produce
+    /// the same rejection, so LoopRunner short-circuits the run instead of
+    /// burning iterations until the stuck-loop circuit trips.
+    public bool IterationFatalError { get; private set; }
+    public string? IterationFatalErrorMessage { get; private set; }
 
     public event EventHandler<string>? SessionIdCaptured;
     public event EventHandler<(long input, long output, long cached)>? TokenUsageReported;
@@ -111,8 +117,20 @@ public sealed class StreamJsonFormatter
             {
                 var pre = GetNumber(root, "pre_tokens") ?? GetNumber(root, "input_tokens_before");
                 var post = GetNumber(root, "post_tokens") ?? GetNumber(root, "input_tokens_after");
-                var detail = (pre != null && post != null) ? $" {pre}→{post} tokens" : "";
-                return $"\n[compact]{detail} — older turns summarised to stay within context\n";
+                var sb = new StringBuilder();
+                sb.Append("\n── compaction ──────────────────────────────\n");
+                if (pre != null && post != null)
+                {
+                    var delta = pre.Value - post.Value;
+                    var sign = delta >= 0 ? "-" : "+";
+                    sb.Append("[compact] ")
+                      .Append($"{pre.Value:N0}").Append(" → ").Append($"{post.Value:N0}").Append(" tokens")
+                      .Append(" · ").Append(sign).Append($"{Math.Abs(delta):N0}")
+                      .Append("\n");
+                }
+                sb.Append("[compact] older turns summarised to stay within context\n");
+                sb.Append("────────────────────────────────────────────\n");
+                return sb.ToString();
             }
             default:
                 return "";
@@ -270,6 +288,33 @@ public sealed class StreamJsonFormatter
         ParseRalphStatusFromAccumulated();
 
         var subtype = GetString(root, "subtype") ?? "";
+
+        // Claude signals fatal errors via result events whose subtype is
+        // non-success (e.g. "error_during_execution") and carry the error
+        // text in one of: `result` / `error` / `message` (strings) or
+        // `errors` (ARRAY of strings — this is where image-dimension /
+        // invalid-session errors actually live). We render them as a visible
+        // banner with actionable guidance instead of letting the error hide.
+        bool isErrorFlag = root.TryGetProperty("is_error", out var ie) && ie.ValueKind == JsonValueKind.True;
+        bool nonSuccessSubtype = !string.IsNullOrEmpty(subtype)
+                                 && !subtype.Equals("success", StringComparison.OrdinalIgnoreCase);
+        if (nonSuccessSubtype || isErrorFlag)
+        {
+            var errMsg = ExtractErrorMessage(root);
+            IterationFatalError = true;
+            IterationFatalErrorMessage = errMsg;
+            var sb = new StringBuilder();
+            // "success" subtype with is_error=true means "API returned content
+            // but the provider rejected it before execution" — don't mislabel
+            // that as "success".
+            var label = (!nonSuccessSubtype && isErrorFlag) ? "blocked" : (string.IsNullOrEmpty(subtype) ? "error" : subtype);
+            sb.Append($"\n══ claude error · {label} ═══════════════════\n");
+            sb.Append("⚠ ").Append(errMsg).Append('\n');
+            AppendErrorGuidance(sb, errMsg);
+            sb.Append("══════════════════════════════════════════════\n");
+            return sb.ToString();
+        }
+
         var parts = new List<string>();
         if (root.TryGetProperty("duration_ms", out var dur) && dur.ValueKind == JsonValueKind.Number)
             parts.Add($"{dur.GetDouble() / 1000.0:0.0}s");
@@ -345,6 +390,101 @@ public sealed class StreamJsonFormatter
             return sb.ToString();
         }
         return "";
+    }
+
+    /// Classifies a fatal error message into "recoverable by starting a fresh
+    /// session" vs "truly stuck". Used by LoopRunner to decide whether to
+    /// auto-fork-and-retry on fatal errors like image-dimension limits,
+    /// invalid session ids, and context overflow — all of which a new session
+    /// cleanly fixes. Auth and rate-limit errors are NOT recoverable by a
+    /// fresh session, so we stop on those.
+    public static bool IsRecoverableByFreshSession(string? errMsg)
+    {
+        if (string.IsNullOrWhiteSpace(errMsg)) return false;
+        var m = errMsg.ToLowerInvariant();
+
+        if (m.Contains("auth") || m.Contains("unauthorized")
+            || m.Contains("api key") || m.Contains("api_key")
+            || m.Contains("401") || m.Contains("403"))
+            return false;
+        if (m.Contains("rate limit") || m.Contains("rate_limit") || m.Contains("429"))
+            return false;
+
+        if (m.Contains("image") && (m.Contains("dimension") || m.Contains("2000px") || m.Contains("pixels")))
+            return true;
+        if (m.Contains("no conversation found with session")) return true;
+        if (m.Contains("context")
+            && (m.Contains("exceed") || m.Contains("limit") || m.Contains("overflow")
+                || m.Contains("too long") || m.Contains("too large")))
+            return true;
+        if (m.Contains("prompt is too long") || m.Contains("request too large"))
+            return true;
+
+        return false;
+    }
+
+    /// Extract the human-readable error message from a claude result event.
+    /// The text may live in any of: `result` (string), `error` (string),
+    /// `message` (string), or — critically — `errors` (ARRAY of strings).
+    /// Image-dimension rejections and session-not-found errors land in
+    /// `errors[]`, which is what previously left us with "(no error message)".
+    private static string ExtractErrorMessage(JsonElement root)
+    {
+        var direct = GetString(root, "result")
+                  ?? GetString(root, "error")
+                  ?? GetString(root, "message");
+        if (!string.IsNullOrWhiteSpace(direct)) return direct!;
+
+        if (root.TryGetProperty("errors", out var arr) && arr.ValueKind == JsonValueKind.Array)
+        {
+            var bits = new List<string>();
+            foreach (var el in arr.EnumerateArray())
+            {
+                if (el.ValueKind == JsonValueKind.String)
+                {
+                    var s = el.GetString();
+                    if (!string.IsNullOrWhiteSpace(s)) bits.Add(s!);
+                }
+                else if (el.ValueKind == JsonValueKind.Object)
+                {
+                    var s = GetString(el, "message") ?? GetString(el, "error") ?? GetString(el, "text");
+                    if (!string.IsNullOrWhiteSpace(s)) bits.Add(s!);
+                }
+            }
+            if (bits.Count > 0) return string.Join("; ", bits);
+        }
+
+        return "(no error message)";
+    }
+
+    /// Classifies common Claude error messages and appends recovery advice.
+    /// These patterns are stable in practice — the error strings come from
+    /// Claude Code's own source, not a model, so they don't drift often.
+    private static void AppendErrorGuidance(StringBuilder sb, string errMsg)
+    {
+        var lower = errMsg.ToLowerInvariant();
+        if (lower.Contains("image") && (lower.Contains("dimension") || lower.Contains("2000px") || lower.Contains("pixels")))
+        {
+            sb.Append("[justcode] an oversized image is locked into this session and can't be removed from its history.\n");
+            sb.Append("[justcode] right-click the conversation → Fork from current position to branch off without it,\n");
+            sb.Append("[justcode] or click Clear Session to start fresh. Resize images to ≤ 2000px before sending.\n");
+        }
+        else if (lower.Contains("context") && (lower.Contains("exceed") || lower.Contains("limit") || lower.Contains("overflow") || lower.Contains("too long") || lower.Contains("too large")))
+        {
+            sb.Append("[justcode] context limit reached. Claude should auto-compact on the next turn;\n");
+            sb.Append("[justcode] if it doesn't recover, right-click the conversation → Fork from current position\n");
+            sb.Append("[justcode] or Clear Session to start fresh.\n");
+        }
+        else if (lower.Contains("rate limit") || lower.Contains("rate_limit"))
+        {
+            sb.Append("[justcode] rate-limited. The inactivity timer will retry automatically;\n");
+            sb.Append("[justcode] if it keeps failing, pause and resume later.\n");
+        }
+        else if (lower.Contains("auth") || lower.Contains("unauthorized") || lower.Contains("api key"))
+        {
+            sb.Append("[justcode] authentication problem. Run `claude` once interactively to re-login,\n");
+            sb.Append("[justcode] or check ANTHROPIC_API_KEY in your environment.\n");
+        }
     }
 
     private void ParseRalphStatusFromAccumulated()

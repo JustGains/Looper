@@ -17,6 +17,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public LoopSettings Settings { get; }
 
+    public ModelPickerViewModel ModelPicker { get; }
+
     public ObservableCollection<ProjectViewModel> Projects { get; } = new();
 
     private ProjectViewModel? _selectedProject;
@@ -45,6 +47,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         new ToolOption(CliTool.ClaudeCode, "Claude Code"),
         new ToolOption(CliTool.Codex, "Codex"),
+        new ToolOption(CliTool.Pi, "Pi"),
     };
 
     public static IReadOnlyList<string> ClaudeModels { get; } = new[]
@@ -55,6 +58,28 @@ public sealed class MainViewModel : INotifyPropertyChanged
     { "", "gpt-5-codex", "gpt-5", "gpt-5.4", "o4-mini", "o3" };
     public static IReadOnlyList<string> CodexEfforts { get; } = new[]
     { "", "low", "medium", "high" };
+    /// Seed list used until `pi --list-models` populates the live cache.
+    /// Covers the most common providers/models pi ships with. Users with API
+    /// keys set will see their live model list appended/replacing this.
+    public static IReadOnlyList<string> PiModelsSeed { get; } = new[]
+    {
+        "",
+        // Anthropic
+        "anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6", "anthropic/claude-haiku-4-5",
+        // OpenAI
+        "openai/gpt-5", "openai/gpt-5-codex", "openai/gpt-4o", "openai/gpt-4o-mini", "openai/o4-mini", "openai/o3",
+        // Google
+        "google/gemini-2.5-pro", "google/gemini-2.5-flash",
+        // xAI
+        "xai/grok-4", "xai/grok-3",
+        // Mistral / Groq / Cerebras / etc
+        "mistral/mistral-large-latest", "groq/llama-3.3-70b-versatile",
+        "cerebras/llama-3.3-70b", "openrouter/deepseek-chat",
+        // Ollama (local)
+        "ollama/llama3.1", "ollama/qwen2.5-coder",
+    };
+    public static IReadOnlyList<string> PiEfforts { get; } = new[]
+    { "", "off", "minimal", "low", "medium", "high", "xhigh" };
 
     public IReadOnlyList<ToolOption> ToolOptions => AllToolOptions;
 
@@ -96,6 +121,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         _configStore = new ConfigStore();
         Settings = _configStore.Load();
         SyncRecentList();
+        ModelPicker = new ModelPickerViewModel(Settings, SaveConfig, Settings.Tool);
+        // Best-effort live refresh (pi only); no-op for Claude/Codex and
+        // silent-fail if pi isn't installed.
+        _ = ModelPicker.RefreshFromCliAsync();
     }
 
     public void InitializeTabs(string fallbackDir)

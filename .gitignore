@@ -65,4 +65,6 @@ coverage*.info
 
 # Build outputs used while the app is running (avoids file-lock rebuild failures)
 .build-test/
+.build-test2/
+.build-test3/
 publish/

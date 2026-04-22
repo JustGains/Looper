@@ -13,9 +13,9 @@ public sealed class CliProcessRunner
     private Process? _process;
     private readonly object _lock = new();
 
-    public async Task<int> RunAsync(ConversationSettings settings, string workingDirectory, string prompt, bool continueSession, string? sessionId, CancellationToken ct)
+    public async Task<int> RunAsync(ConversationSettings settings, string workingDirectory, string prompt, bool continueSession, string? sessionId, CancellationToken ct, IReadOnlyList<string>? skillPaths = null, bool fork = false)
     {
-        var (fileName, args) = BuildCommand(settings, continueSession, sessionId);
+        var (fileName, args) = BuildCommand(settings, continueSession, sessionId, skillPaths, fork);
         var resolved = ResolveExecutable(fileName);
         if (resolved == null)
         {
@@ -128,7 +128,7 @@ public sealed class CliProcessRunner
         return null;
     }
 
-    private static (string fileName, string[] args) BuildCommand(ConversationSettings s, bool continueSession, string? sessionId)
+    private static (string fileName, string[] args) BuildCommand(ConversationSettings s, bool continueSession, string? sessionId, IReadOnlyList<string>? skillPaths, bool fork)
     {
         switch (s.Tool)
         {
@@ -143,14 +143,17 @@ public sealed class CliProcessRunner
                     "--include-partial-messages",
                     "--thinking-display", "summarized",
                 };
+                // continueSession is only true when we have our own session id
+                // (LoopRunner guarantees this); --continue without an id is a
+                // footgun that resumes another conversation's session.
                 if (continueSession && !string.IsNullOrEmpty(sessionId))
                 {
                     a.Add("--resume");
                     a.Add(sessionId);
-                }
-                else if (continueSession)
-                {
-                    a.Add("--continue");
+                    // `--fork-session`: resume at this point but emit a new
+                    // session id so the parent is untouched. Claude supports
+                    // this natively — one flag, done.
+                    if (fork) a.Add("--fork-session");
                 }
                 if (!string.IsNullOrWhiteSpace(s.ClaudeModel))
                 {
@@ -167,18 +170,25 @@ public sealed class CliProcessRunner
             case CliTool.Codex:
             {
                 var a = new List<string> { "exec" };
-                if (continueSession)
+                // Codex has `codex fork` only as an INTERACTIVE command; there
+                // is no `codex exec fork`. To fork non-interactively we copy
+                // the session file to a new uuid and resume the copy, which
+                // isolates the fork from the parent's session file.
+                var effectiveSessionId = sessionId;
+                if (fork && !string.IsNullOrEmpty(sessionId))
                 {
-                    // `codex exec resume` only accepts a subset of `codex exec` flags.
-                    // --color / -m / -c are NOT valid here; the resumed session
-                    // inherits its model/effort from creation time.
+                    var forked = ForkCodexSessionFile(sessionId);
+                    if (!string.IsNullOrEmpty(forked)) effectiveSessionId = forked;
+                }
+                if (continueSession && !string.IsNullOrEmpty(effectiveSessionId))
+                {
+                    // `codex exec resume <id>` — session id is the only way to
+                    // isolate between conversations. Never use `--last`, which
+                    // resumes the CLI's global most-recent (= another conv).
                     a.Add("resume");
                     a.Add("--dangerously-bypass-approvals-and-sandbox");
                     a.Add("--skip-git-repo-check");
-                    if (!string.IsNullOrEmpty(sessionId))
-                        a.Add(sessionId);
-                    else
-                        a.Add("--last");
+                    a.Add(effectiveSessionId);
                 }
                 else
                 {
@@ -200,8 +210,88 @@ public sealed class CliProcessRunner
                 a.Add("-");
                 return ("codex", a.ToArray());
             }
+            case CliTool.Pi:
+            {
+                // pi accepts prompt via stdin (piped) in --print mode.
+                var a = new List<string>
+                {
+                    "--print",
+                    "--mode", "json",
+                    "--no-context-files", // we manage our own context via the wrapper
+                };
+                // Fork beats resume: --fork <id> reads the source session but
+                // writes changes to a brand-new session file.
+                if (fork && !string.IsNullOrEmpty(sessionId))
+                {
+                    a.Add("--fork");
+                    a.Add(sessionId);
+                }
+                // Only resume when we own the session id; `--continue` would
+                // resume pi's global most-recent session → another conv.
+                else if (continueSession && !string.IsNullOrEmpty(sessionId))
+                {
+                    a.Add("--session");
+                    a.Add(sessionId);
+                }
+                if (!string.IsNullOrWhiteSpace(s.PiModel))
+                {
+                    a.Add("--model");
+                    a.Add(s.PiModel);
+                }
+                if (!string.IsNullOrWhiteSpace(s.PiThinking))
+                {
+                    a.Add("--thinking");
+                    a.Add(s.PiThinking);
+                }
+                // Skills: the UI owns which skills to load. If the user has
+                // toggled any skills on, we disable Pi's default discovery
+                // and pass `--skill <path>` explicitly so the set is exact.
+                // When nothing is toggled we stay out of Pi's way and let
+                // its normal discovery run (preserves backwards behaviour).
+                if (skillPaths != null && skillPaths.Count > 0)
+                {
+                    a.Add("--no-skills");
+                    foreach (var p in skillPaths)
+                    {
+                        if (string.IsNullOrWhiteSpace(p)) continue;
+                        a.Add("--skill");
+                        a.Add(p);
+                    }
+                }
+                return ("pi", a.ToArray());
+            }
             default:
                 throw new ArgumentOutOfRangeException();
+        }
+    }
+
+    /// Codex has no non-interactive `fork` subcommand, so we duplicate the
+    /// parent's session file under a new UUID and resume the copy. Codex
+    /// treats the filename's UUID as the session id, so the copy writes its
+    /// own trail and the parent stays pristine. Returns the new session id
+    /// on success, or null if the source file couldn't be located/copied.
+    private static string? ForkCodexSessionFile(string sourceSessionId)
+    {
+        try
+        {
+            var root = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".codex", "sessions");
+            if (!Directory.Exists(root)) return null;
+            var match = Directory.EnumerateFiles(root, "*.jsonl", SearchOption.AllDirectories)
+                .FirstOrDefault(f => Path.GetFileName(f).IndexOf(sourceSessionId, StringComparison.OrdinalIgnoreCase) >= 0);
+            if (match == null) return null;
+            var newUuid = Guid.NewGuid().ToString("D");
+            var dir = Path.GetDirectoryName(match)!;
+            var newName = Path.GetFileName(match)
+                .Replace(sourceSessionId, newUuid, StringComparison.OrdinalIgnoreCase);
+            var dest = Path.Combine(dir, newName);
+            File.Copy(match, dest, overwrite: false);
+            return newUuid;
+        }
+        catch
+        {
+            return null;
         }
     }
 }

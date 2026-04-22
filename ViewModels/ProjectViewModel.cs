@@ -50,6 +50,45 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
     /// True if any conversation is running. Used for the project tab header indicator.
     public bool IsRunning => Conversations.Any(c => c.IsRunning);
 
+    /// Cached package.json discovery — refreshed on demand when the launch
+    /// button is clicked so we don't rescan during steady-state use.
+    private IReadOnlyList<PackageInfo>? _packages;
+    public IReadOnlyList<PackageInfo> DiscoverPackages()
+    {
+        _packages = PackageJsonService.Discover(WorkingDirectory);
+        return _packages;
+    }
+
+    public bool HasRootPackageJson => File.Exists(Path.Combine(WorkingDirectory, "package.json"));
+
+    /// File-explorer panel. Built lazily the first time the tab is shown so
+    /// cold-startup of the app doesn't walk disk for every open project.
+    private FileExplorerViewModel? _fileExplorer;
+    public FileExplorerViewModel FileExplorer =>
+        _fileExplorer ??= new FileExplorerViewModel(WorkingDirectory);
+
+    /// Which panel is active in the activity-bar sidebar. `"files"` / `"conversations"` / `"git"`.
+    /// Persisted across app sessions via ProjectConfig.LastSidebarTab.
+    public string SidebarTab
+    {
+        get => _projectConfig.LastSidebarTab ?? "conversations";
+        set
+        {
+            var v = string.IsNullOrWhiteSpace(value) ? "conversations" : value;
+            if (_projectConfig.LastSidebarTab == v) return;
+            _projectConfig.LastSidebarTab = v;
+            SaveProjectConfig();
+            OnChanged();
+            OnChanged(nameof(IsFilesTab));
+            OnChanged(nameof(IsConversationsTab));
+            OnChanged(nameof(IsGitTab));
+        }
+    }
+
+    public bool IsFilesTab => SidebarTab == "files";
+    public bool IsConversationsTab => SidebarTab == "conversations";
+    public bool IsGitTab => SidebarTab == "git";
+
     public ProjectViewModel(string workingDirectory, LoopSettings shellDefaults)
     {
         WorkingDirectory = ConfigStore.Normalize(workingDirectory);
@@ -117,6 +156,84 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
         var vm = new ConversationViewModel(WorkingDirectory, cfg,
             persistSettings: () => ConversationStore.SaveConversation(WorkingDirectory, cfg));
         return vm;
+    }
+
+    /// Fork an existing conversation from its current position. The new
+    /// conversation inherits the source's settings, prompt, and task list,
+    /// and its first run will use the per-tool fork flag so the parent's
+    /// session isn't mutated.
+    public ConversationViewModel ForkConversation(ConversationViewModel source)
+    {
+        if (source == null) throw new ArgumentNullException(nameof(source));
+        var src = ConversationStore.LoadConversation(WorkingDirectory, source.Id);
+
+        var newName = UniqueForkName(source.Name);
+        var cfg = new ConversationSettings
+        {
+            Id = ConversationStore.NewId(),
+            Name = newName,
+            Tool = src.Tool,
+            TimeoutSeconds = src.TimeoutSeconds,
+            MaxIterations = src.MaxIterations,
+            RalphEnabled = src.RalphEnabled,
+            KeepContext = src.KeepContext,
+            ClaudeModel = src.ClaudeModel,
+            ClaudeEffort = src.ClaudeEffort,
+            CodexModel = src.CodexModel,
+            CodexEffort = src.CodexEffort,
+            PiModel = src.PiModel,
+            PiThinking = src.PiThinking,
+            EnabledSkills = new List<string>(src.EnabledSkills),
+            MentionMap = new Dictionary<string, string>(src.MentionMap, StringComparer.OrdinalIgnoreCase),
+            // Key piece: next run forks from the parent's current session id.
+            // Cleared automatically once the CLI captures the forked session's
+            // new id.
+            PendingForkFromSessionId = string.IsNullOrEmpty(src.LastSessionId) ? null : src.LastSessionId,
+            LastSessionId = null,
+            LastSessionTimestamp = null,
+        };
+        ConversationStore.SaveConversation(WorkingDirectory, cfg);
+
+        // Seed the forked conversation with the parent's prompt + tasks so
+        // it starts where the user left off.
+        TryCopy(ConversationStore.PromptFile(WorkingDirectory, source.Id),
+                ConversationStore.PromptFile(WorkingDirectory, cfg.Id));
+        TryCopy(ConversationStore.TasksFile(WorkingDirectory, source.Id),
+                ConversationStore.TasksFile(WorkingDirectory, cfg.Id));
+
+        var vm = new ConversationViewModel(WorkingDirectory, cfg,
+            persistSettings: () => ConversationStore.SaveConversation(WorkingDirectory, cfg));
+        Conversations.Add(vm);
+        ConversationAdded?.Invoke(this, vm);
+
+        _projectConfig.ConversationOrder = Conversations.Select(c => c.Id).ToList();
+        SaveProjectConfig();
+        SelectedConversation = vm;
+        return vm;
+    }
+
+    private string UniqueForkName(string baseName)
+    {
+        var existing = new HashSet<string>(Conversations.Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
+        var candidate = $"{baseName} (fork)";
+        if (!existing.Contains(candidate)) return candidate;
+        for (int i = 2; ; i++)
+        {
+            var next = $"{baseName} (fork {i})";
+            if (!existing.Contains(next)) return next;
+        }
+    }
+
+    private static void TryCopy(string src, string dst)
+    {
+        try
+        {
+            if (!File.Exists(src)) return;
+            var dir = Path.GetDirectoryName(dst);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.Copy(src, dst, overwrite: true);
+        }
+        catch { }
     }
 
     public ConversationViewModel AddConversation()

@@ -173,5 +173,5 @@ Each iteration has an inactivity timeout (default 120 s, configurable). If the C
 ---
 
 <div align="center">
-<sub>© JustGains · MIT-style internal use</sub>
+<sub>© JustGains · Licensed under the MIT License</sub>
 </div>

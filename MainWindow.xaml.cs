@@ -823,6 +823,35 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+    // ---- Conversation right-click context menu ----
+
+    /// The ListBoxItem's ContextMenu inherits DataContext from the item, so
+    /// each MenuItem.DataContext is the conversation the user right-clicked.
+    private static ConversationViewModel? ResolveContextConv(object sender)
+        => sender is MenuItem mi ? mi.DataContext as ConversationViewModel : null;
+
+    private void ForkConversation_Click(object sender, RoutedEventArgs e)
+    {
+        var src = ResolveContextConv(sender);
+        if (src == null) return;
+        var project = _vm.Projects.FirstOrDefault(p => p.Conversations.Contains(src));
+        project?.ForkConversation(src);
+    }
+
+    private void RenameConversationCtx_Click(object sender, RoutedEventArgs e)
+    {
+        var c = ResolveContextConv(sender);
+        c?.BeginRename();
+    }
+
+    private void DeleteConversationCtx_Click(object sender, RoutedEventArgs e)
+    {
+        var c = ResolveContextConv(sender);
+        if (c == null) return;
+        var project = _vm.Projects.FirstOrDefault(p => p.Conversations.Contains(c));
+        project?.RemoveConversation(c);
+    }
+
     private async void StartStop_Click(object sender, RoutedEventArgs e)
     {
         var c = _vm.SelectedProject?.SelectedConversation;
@@ -845,6 +874,106 @@ public partial class MainWindow : Window
         conv.ClearSession();
     }
 
+    private void SessionPill_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        var conv = _vm.SelectedProject?.SelectedConversation;
+        var id = conv?.CurrentSessionId;
+        if (string.IsNullOrEmpty(id) || conv is null) return;
+        try
+        {
+            Clipboard.SetText(id);
+            conv.FlashSessionCopied();
+        }
+        catch
+        {
+            // Clipboard access can occasionally fail (another app owning it);
+            // swallow rather than surface an error for a cosmetic copy.
+        }
+        e.Handled = true;
+    }
+
+    private void ModelPickerButton_Click(object sender, RoutedEventArgs e)
+    {
+        var conv = _vm.SelectedProject?.SelectedConversation;
+        if (conv == null) return;
+        // Retarget the shared picker to the current conversation's tool so the
+        // model list + favorites match the agent being used.
+        _vm.ModelPicker.Tool = conv.Tool;
+        // For Pi, if the cache is empty (first run, or previous parse failed)
+        // kick off a refresh immediately so the user sees real models instead
+        // of the hardcoded fallback seed (which contains openai/gpt-5 etc.
+        // that don't work under GitHub Copilot auth).
+        if (conv.Tool == JustCode.Models.CliTool.Pi &&
+            (_vm.Settings.PiModelCache == null || _vm.Settings.PiModelCache.Count == 0))
+        {
+            _ = _vm.ModelPicker.RefreshFromCliAsync();
+        }
+        ModelPopup.IsOpen = true;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            ModelSearchBox.Focus();
+            ModelSearchBox.SelectAll();
+        }), System.Windows.Threading.DispatcherPriority.Input);
+    }
+
+    private void ModelRefresh_Click(object sender, RoutedEventArgs e)
+        => _ = _vm.ModelPicker.RefreshFromCliAsync(clearFirst: true);
+
+    private void ModelClear_Click(object sender, RoutedEventArgs e)
+    {
+        var conv = _vm.SelectedProject?.SelectedConversation;
+        if (conv == null) return;
+        conv.ModelText = "";
+        ModelPopup.IsOpen = false;
+    }
+
+    private void ModelFavoriteToggle_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button b && b.Tag is ModelEntry entry)
+            entry.ToggleFavorite();
+        e.Handled = true;
+    }
+
+    private void ModelList_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        => AcceptModelSelection();
+
+    private void ModelList_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Enter) { AcceptModelSelection(); e.Handled = true; }
+        else if (e.Key == System.Windows.Input.Key.Escape) { ModelPopup.IsOpen = false; e.Handled = true; }
+    }
+
+    private void ModelSearchBox_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Down && ModelList.Items.Count > 0)
+        {
+            ModelList.SelectedIndex = 0;
+            var container = ModelList.ItemContainerGenerator.ContainerFromIndex(0) as ListBoxItem;
+            container?.Focus();
+            e.Handled = true;
+        }
+        else if (e.Key == System.Windows.Input.Key.Enter && ModelList.Items.Count > 0)
+        {
+            ModelList.SelectedIndex = 0;
+            AcceptModelSelection();
+            e.Handled = true;
+        }
+        else if (e.Key == System.Windows.Input.Key.Escape)
+        {
+            ModelPopup.IsOpen = false;
+            e.Handled = true;
+        }
+    }
+
+    private void AcceptModelSelection()
+    {
+        if (ModelList.SelectedItem is not ModelEntry entry) return;
+        var conv = _vm.SelectedProject?.SelectedConversation;
+        if (conv == null) return;
+        conv.ModelText = entry.Name;
+        ModelPopup.IsOpen = false;
+    }
+
     private void ChatSend_Click(object sender, RoutedEventArgs e)
     {
         ChatInputBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
@@ -852,18 +981,24 @@ public partial class MainWindow : Window
     }
 
     private void ChatInputBox_TextChanged(object sender, TextChangedEventArgs e)
-        => UpdateMentionPopup(ChatInputBox);
+    {
+        UpdateMentionPopup(ChatInputBox);
+        UpdateSlashPopup();
+    }
 
     private void ChatInputBox_SelectionChanged(object sender, RoutedEventArgs e)
     {
         UpdateMentionPopup(ChatInputBox);
         AutoSelectMentionIfCaretInside(ChatInputBox);
+        UpdateSlashPopup();
     }
 
     private void ChatInputBox_LostFocus(object sender, RoutedEventArgs e)
     {
         if (_activeMentionBox == ChatInputBox && MentionPopup.IsOpen && !MentionList.IsKeyboardFocusWithin)
             CloseMentionPopup();
+        if (SlashPopup.IsOpen && !SlashList.IsKeyboardFocusWithin)
+            CloseSlashPopup();
     }
 
     private void ChatInputBox_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
@@ -874,6 +1009,14 @@ public partial class MainWindow : Window
 
     private void ChatInputBox_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
+        // Slash-command popup takes the highest precedence when it's open,
+        // so arrow keys / Tab / Enter drive it instead of submitting.
+        if (SlashPopup.IsOpen)
+        {
+            HandleSlashPopupKey(e);
+            if (e.Handled) return;
+        }
+
         // Mention popup navigation takes precedence when open on this box.
         if (_activeMentionBox == ChatInputBox && MentionPopup.IsOpen)
         {
@@ -957,7 +1100,347 @@ public partial class MainWindow : Window
             _vm.SelectedProject?.SelectedConversation?.RemoveQueued(msg);
     }
 
+    // ---------- Slash commands (queue prompt area) ----------
+
+    /// Slash commands available in the chat box. Each entry is matched by
+    /// substring against the user's query (the text after the leading `/`).
+    /// Keep this sorted by likely usefulness; the first match auto-highlights.
+    private sealed record SlashCommand(string Trigger, string Description);
+    private static readonly IReadOnlyList<SlashCommand> AllSlashCommands = new[]
+    {
+        new SlashCommand("/plan",
+            "Read and update the PLAN file for this conversation. Strict: no task execution."),
+    };
+
+    private void UpdateSlashPopup()
+    {
+        var text = ChatInputBox.Text ?? "";
+        if (text.Length == 0 || text[0] != '/')
+        {
+            CloseSlashPopup();
+            return;
+        }
+
+        // Only match on the first token so we don't keep the popup open for
+        // long multi-line prompts that happen to start with `/`.
+        var firstWhitespace = 0;
+        while (firstWhitespace < text.Length && !char.IsWhiteSpace(text[firstWhitespace]))
+            firstWhitespace++;
+        if (ChatInputBox.CaretIndex > firstWhitespace)
+        {
+            CloseSlashPopup();
+            return;
+        }
+
+        var query = text.Substring(1, firstWhitespace - 1);
+        var matches = AllSlashCommands
+            .Where(c => c.Trigger.Length > 1 &&
+                        c.Trigger.Substring(1).Contains(query, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (matches.Count == 0)
+        {
+            CloseSlashPopup();
+            return;
+        }
+
+        SlashList.ItemsSource = matches;
+        if (SlashList.SelectedIndex < 0) SlashList.SelectedIndex = 0;
+        SlashPopup.IsOpen = true;
+    }
+
+    private void CloseSlashPopup()
+    {
+        if (SlashPopup.IsOpen) SlashPopup.IsOpen = false;
+    }
+
+    private void HandleSlashPopupKey(System.Windows.Input.KeyEventArgs e)
+    {
+        int count = SlashList.Items.Count;
+        if (count == 0) return;
+        switch (e.Key)
+        {
+            case System.Windows.Input.Key.Up:
+                SlashList.SelectedIndex = (SlashList.SelectedIndex - 1 + count) % count;
+                SlashList.ScrollIntoView(SlashList.SelectedItem);
+                e.Handled = true;
+                break;
+            case System.Windows.Input.Key.Down:
+                SlashList.SelectedIndex = (SlashList.SelectedIndex + 1) % count;
+                SlashList.ScrollIntoView(SlashList.SelectedItem);
+                e.Handled = true;
+                break;
+            case System.Windows.Input.Key.Tab:
+            case System.Windows.Input.Key.Enter:
+                AcceptSlashSelection();
+                e.Handled = true;
+                break;
+            case System.Windows.Input.Key.Escape:
+                CloseSlashPopup();
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void AcceptSlashSelection()
+    {
+        if (!SlashPopup.IsOpen) return;
+        if (SlashList.SelectedItem is not SlashCommand cmd) return;
+        var current = ChatInputBox.Text ?? "";
+        var firstWhitespace = 0;
+        while (firstWhitespace < current.Length && !char.IsWhiteSpace(current[firstWhitespace]))
+            firstWhitespace++;
+        var newText = cmd.Trigger + " " + current.Substring(firstWhitespace).TrimStart();
+        ChatInputBox.Text = newText;
+        ChatInputBox.CaretIndex = newText.Length;
+        ChatInputBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        CloseSlashPopup();
+    }
+
     private void OpenConfig_Click(object sender, RoutedEventArgs e) => _vm.OpenConfigInNotepad();
+
+    // ---------- Sidebar tabs (VS Code-style activity bar) ----------
+
+    private void SidebarTab_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button b || b.Tag is not string tag) return;
+        var project = _vm.SelectedProject;
+        if (project != null) project.SidebarTab = tag;
+    }
+
+    private void FilesRefresh_Click(object sender, RoutedEventArgs e)
+        => _vm.SelectedProject?.FileExplorer.Refresh();
+
+    private void FileNode_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (e.ClickCount != 2) return;
+        if (sender is FrameworkElement fe && fe.DataContext is FileNode node && !node.IsDirectory)
+        {
+            FileExplorerViewModel.Open(node);
+            e.Handled = true;
+        }
+    }
+
+    private static FileNode? GetContextFileNode(object sender)
+    {
+        if (sender is not MenuItem mi) return null;
+        // The parent ContextMenu's PlacementTarget is the TreeViewItem container.
+        var cm = mi.Parent as ContextMenu ?? ((MenuItem)mi.Parent).Parent as ContextMenu;
+        if (cm?.PlacementTarget is FrameworkElement fe && fe.DataContext is FileNode n) return n;
+        return null;
+    }
+
+    private void FileNodeOpen_Click(object sender, RoutedEventArgs e)
+    {
+        if (GetContextFileNode(sender) is { } n) FileExplorerViewModel.Open(n);
+    }
+
+    private void FileNodeReveal_Click(object sender, RoutedEventArgs e)
+    {
+        if (GetContextFileNode(sender) is { } n) FileExplorerViewModel.RevealInExplorer(n);
+    }
+
+    private void FileNodeCopyPath_Click(object sender, RoutedEventArgs e)
+    {
+        if (GetContextFileNode(sender) is { } n)
+            try { Clipboard.SetText(n.FullPath); } catch { }
+    }
+
+    private void FileNodeCopyRelPath_Click(object sender, RoutedEventArgs e)
+    {
+        var n = GetContextFileNode(sender);
+        var wd = _vm.SelectedProject?.WorkingDirectory;
+        if (n == null || string.IsNullOrEmpty(wd)) return;
+        try
+        {
+            var rel = Path.GetRelativePath(wd, n.FullPath).Replace('\\', '/');
+            Clipboard.SetText(rel);
+        }
+        catch { }
+    }
+
+    // ---------- package.json launcher ----------
+
+    private void LaunchScriptButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn) return;
+        var project = _vm.SelectedProject;
+        if (project == null) return;
+
+        var packages = project.DiscoverPackages();
+        if (packages.Count == 0) return;
+
+        var menu = new ContextMenu
+        {
+            PlacementTarget = btn,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Top,
+            HasDropShadow = true,
+            Background = (System.Windows.Media.Brush)FindResource("BgSurface"),
+            BorderBrush = (System.Windows.Media.Brush)FindResource("Border1"),
+            Foreground = (System.Windows.Media.Brush)FindResource("FgPrimary"),
+        };
+
+        // Root project first — scripts go in without a section header.
+        var root = packages.FirstOrDefault(p => p.IsRoot);
+        if (root != null)
+        {
+            AppendPackageItems(menu, root);
+        }
+
+        // Nested packages get section headers (monorepo workspaces etc.).
+        var nested = packages.Where(p => !p.IsRoot).ToList();
+        if (nested.Count > 0)
+        {
+            if (root != null) menu.Items.Add(new Separator());
+            var header = new MenuItem
+            {
+                Header = $"Workspaces ({nested.Count})",
+                IsEnabled = false,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = (System.Windows.Media.Brush)FindResource("FgDim"),
+            };
+            menu.Items.Add(header);
+            foreach (var pkg in nested)
+                AppendPackageItems(menu, pkg, asSubmenu: true);
+        }
+
+        if (menu.Items.Count == 0) return;
+        menu.IsOpen = true;
+    }
+
+    /// Build MenuItems for a single package. When `asSubmenu` is true the
+    /// package gets wrapped in a single parent item (workspace case). When
+    /// false, script items are appended inline (root project case).
+    private void AppendPackageItems(ContextMenu menu, PackageInfo pkg, bool asSubmenu = false)
+    {
+        var tree = PackageJsonService.BuildTree(pkg.Scripts);
+        if (asSubmenu)
+        {
+            var parent = new MenuItem { Header = pkg.DisplayName };
+            if (tree.Children.Count == 0)
+            {
+                parent.IsEnabled = false;
+                parent.Header = $"{pkg.DisplayName} — no scripts";
+            }
+            else
+            {
+                foreach (var node in tree.Children)
+                    parent.Items.Add(BuildMenuItem(node, pkg));
+            }
+            menu.Items.Add(parent);
+        }
+        else
+        {
+            if (tree.Children.Count == 0)
+            {
+                menu.Items.Add(new MenuItem
+                {
+                    Header = "No scripts in package.json",
+                    IsEnabled = false,
+                    Foreground = (System.Windows.Media.Brush)FindResource("FgDim"),
+                });
+                return;
+            }
+            foreach (var node in tree.Children)
+                menu.Items.Add(BuildMenuItem(node, pkg));
+        }
+    }
+
+    /// Recursively materialize a ScriptNode. Leaves wire up a Click handler
+    /// that spawns the package manager. Parents with children render as
+    /// submenus — if a parent is also a leaf (e.g. `test` exists alongside
+    /// `test:unit`) we prepend a "Run 'test'" leaf inside its submenu.
+    private MenuItem BuildMenuItem(ScriptNode node, PackageInfo pkg)
+    {
+        var item = new MenuItem { Header = node.Segment };
+
+        if (node.HasChildren)
+        {
+            if (node.IsLeaf)
+            {
+                // Both a group AND a runnable script — add a "Run '<name>'"
+                // entry at the top of the submenu plus a separator.
+                var self = new MenuItem
+                {
+                    Header = $"Run '{node.FullName}'",
+                    ToolTip = node.Command,
+                };
+                var captured = node.FullName!;
+                self.Click += (_, _) => PackageJsonService.RunScript(pkg.DirPath, pkg.PackageManager, captured);
+                item.Items.Add(self);
+                item.Items.Add(new Separator());
+            }
+            foreach (var child in node.Children)
+                item.Items.Add(BuildMenuItem(child, pkg));
+        }
+        else if (node.IsLeaf)
+        {
+            item.ToolTip = node.Command;
+            var captured = node.FullName!;
+            item.Click += (_, _) => PackageJsonService.RunScript(pkg.DirPath, pkg.PackageManager, captured);
+        }
+
+        return item;
+    }
+
+    // ---------- Skills menu (Pi-only) ----------
+
+    private void SkillsButton_Click(object sender, RoutedEventArgs e)
+    {
+        var conv = _vm.SelectedProject?.SelectedConversation;
+        if (conv == null) return;
+        conv.RefreshSkills();
+        SkillsPopup.IsOpen = true;
+    }
+
+    private void SkillsRefresh_Click(object sender, RoutedEventArgs e)
+        => _vm.SelectedProject?.SelectedConversation?.RefreshSkills();
+
+    private void SkillsAdd_Click(object sender, RoutedEventArgs e)
+    {
+        var conv = _vm.SelectedProject?.SelectedConversation;
+        if (conv == null) return;
+        var dlg = new SkillNameDialog { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+        var name = dlg.SkillName;
+        var dir = SkillsService.CreateSkill(name);
+        if (dir == null)
+        {
+            MessageBox.Show(this, $"Could not create skill \"{name}\" — name invalid or already exists.",
+                "JustCode", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        conv.RefreshSkills();
+        // Open the new SKILL.md so the user can flesh it out immediately.
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "notepad.exe",
+                Arguments = $"\"{System.IO.Path.Combine(dir, "SKILL.md")}\"",
+                UseShellExecute = true,
+            });
+        }
+        catch { }
+    }
+
+    private void SkillsDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button b || b.Tag is not SkillPick pick) return;
+        var conv = _vm.SelectedProject?.SelectedConversation;
+        if (conv == null) return;
+        var confirm = MessageBox.Show(this,
+            $"Delete skill \"{pick.Name}\"?\n\n{pick.Path}",
+            "Delete skill", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+        if (confirm != MessageBoxResult.OK) return;
+
+        if (SkillsService.DeleteSkill(pick.Path, _vm.SelectedProject?.WorkingDirectory))
+            conv.RefreshSkills();
+        else
+            MessageBox.Show(this, "Could not delete skill — it may be outside the known skill roots.",
+                "JustCode", MessageBoxButton.OK, MessageBoxImage.Warning);
+        e.Handled = true;
+    }
 
     private void MaxIterUp_Click(object sender, RoutedEventArgs e)
     {

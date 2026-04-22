@@ -15,6 +15,7 @@
     <Company>JustGains</Company>
     <Authors>JustGains</Authors>
     <Copyright>© JustGains</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <Description>JustCode — a GUI driver for Claude Code and Codex loops.</Description>
     <Version>0.1.0</Version>
     <AssemblyVersion>0.1.0.0</AssemblyVersion>
@@ -28,10 +29,22 @@
 
   <ItemGroup>
     <PackageReference Include="Markdig.Wpf" Version="0.5.0.1" />
+    <PackageReference Include="SharpVectors.Reloaded" Version="1.8.5" />
   </ItemGroup>
 
   <ItemGroup>
     <Resource Include="app.ico" />
+  </ItemGroup>
+
+  <!-- Material icon theme assets (ported from material-extensions/vscode-material-icon-theme).
+       Shipped as Content so the published app can read them at runtime. -->
+  <ItemGroup>
+    <Content Include="Assets\icon-map.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\icons\**\*.svg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>

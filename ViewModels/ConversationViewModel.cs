@@ -110,6 +110,7 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
             OnChanged(nameof(EffortText));
             OnChanged(nameof(ModelSuggestions));
             OnChanged(nameof(EffortSuggestions));
+            OnChanged(nameof(IsPiTool));
         }
     }
 
@@ -121,19 +122,39 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         set { if (value != null) Tool = value.Tool; }
     }
 
-    public IReadOnlyList<string> ModelSuggestions =>
-        Tool == CliTool.ClaudeCode ? MainViewModel.ClaudeModels : MainViewModel.CodexModels;
-    public IReadOnlyList<string> EffortSuggestions =>
-        Tool == CliTool.ClaudeCode ? MainViewModel.ClaudeEfforts : MainViewModel.CodexEfforts;
+    public IReadOnlyList<string> ModelSuggestions => Tool switch
+    {
+        CliTool.ClaudeCode => MainViewModel.ClaudeModels,
+        CliTool.Codex => MainViewModel.CodexModels,
+        CliTool.Pi => MainViewModel.PiModelsSeed,
+        _ => Array.Empty<string>(),
+    };
+    public IReadOnlyList<string> EffortSuggestions => Tool switch
+    {
+        CliTool.ClaudeCode => MainViewModel.ClaudeEfforts,
+        CliTool.Codex => MainViewModel.CodexEfforts,
+        CliTool.Pi => MainViewModel.PiEfforts,
+        _ => Array.Empty<string>(),
+    };
 
     public string ModelText
     {
-        get => (Tool == CliTool.ClaudeCode ? _settings.ClaudeModel : _settings.CodexModel) ?? "";
+        get => (Tool switch
+        {
+            CliTool.ClaudeCode => _settings.ClaudeModel,
+            CliTool.Codex => _settings.CodexModel,
+            CliTool.Pi => _settings.PiModel,
+            _ => null,
+        }) ?? "";
         set
         {
             var v = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-            if (Tool == CliTool.ClaudeCode) _settings.ClaudeModel = v;
-            else _settings.CodexModel = v;
+            switch (Tool)
+            {
+                case CliTool.ClaudeCode: _settings.ClaudeModel = v; break;
+                case CliTool.Codex: _settings.CodexModel = v; break;
+                case CliTool.Pi: _settings.PiModel = v; break;
+            }
             PersistSettings();
             OnChanged();
         }
@@ -141,15 +162,69 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
 
     public string EffortText
     {
-        get => (Tool == CliTool.ClaudeCode ? _settings.ClaudeEffort : _settings.CodexEffort) ?? "";
+        get => (Tool switch
+        {
+            CliTool.ClaudeCode => _settings.ClaudeEffort,
+            CliTool.Codex => _settings.CodexEffort,
+            CliTool.Pi => _settings.PiThinking,
+            _ => null,
+        }) ?? "";
         set
         {
             var v = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-            if (Tool == CliTool.ClaudeCode) _settings.ClaudeEffort = v;
-            else _settings.CodexEffort = v;
+            switch (Tool)
+            {
+                case CliTool.ClaudeCode: _settings.ClaudeEffort = v; break;
+                case CliTool.Codex: _settings.CodexEffort = v; break;
+                case CliTool.Pi: _settings.PiThinking = v; break;
+            }
             PersistSettings();
             OnChanged();
         }
+    }
+
+    public bool IsPiTool => Tool == CliTool.Pi;
+
+    // ---- Pi skills (per-conversation toggle set) ----
+    public ObservableCollection<SkillPick> Skills { get; } = new();
+
+    public int EnabledSkillCount => Skills.Count(s => s.IsEnabled);
+
+    public string SkillsSummary
+    {
+        get
+        {
+            var n = EnabledSkillCount;
+            if (Skills.Count == 0) return "No skills found";
+            return n == 0 ? "No skills enabled" : $"{n} skill{(n == 1 ? "" : "s")} enabled";
+        }
+    }
+
+    public void RefreshSkills()
+    {
+        var discovered = SkillsService.Discover(_workingDirectory);
+        Skills.Clear();
+        foreach (var s in discovered)
+        {
+            var pick = new SkillPick(s, _settings.EnabledSkills.Contains(s.Name, StringComparer.OrdinalIgnoreCase));
+            pick.Toggled += (_, _) =>
+            {
+                _settings.EnabledSkills = Skills.Where(x => x.IsEnabled).Select(x => x.Entry.Name).ToList();
+                PersistSettings();
+                OnChanged(nameof(EnabledSkillCount));
+                OnChanged(nameof(SkillsSummary));
+            };
+            Skills.Add(pick);
+        }
+        OnChanged(nameof(EnabledSkillCount));
+        OnChanged(nameof(SkillsSummary));
+    }
+
+    public IReadOnlyList<string> GetEnabledSkillPaths()
+    {
+        var discovered = SkillsService.Discover(_workingDirectory);
+        var enabled = new HashSet<string>(_settings.EnabledSkills, StringComparer.OrdinalIgnoreCase);
+        return discovered.Where(s => enabled.Contains(s.Name)).Select(s => s.Path).ToList();
     }
 
     public int TimeoutSeconds
@@ -211,7 +286,8 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         {
             if (_prompt == value) return;
             _prompt = value;
-            _promptStore.SavePromptDebounced(value);
+            if (!_suppressPromptSave)
+                _promptStore.SavePromptDebounced(value);
             OnChanged();
             if (IsRunning && _promptAtLastInjection is not null && value != _promptAtLastInjection)
                 PromptPendingChange = true;
@@ -297,6 +373,33 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     }
 
     public bool HasSession => !string.IsNullOrEmpty(_currentSessionId);
+
+    // ---- clipboard-copy feedback for the session pill ----
+    private bool _isSessionCopied;
+    public bool IsSessionCopied
+    {
+        get => _isSessionCopied;
+        private set { if (_isSessionCopied != value) { _isSessionCopied = value; OnChanged(); } }
+    }
+    private DispatcherTimer? _copiedResetTimer;
+    /// Flag the session pill as "just copied" for a brief visual pulse.
+    /// The UI binds Text + Foreground to IsSessionCopied and flips back
+    /// after ~1.2 s so the flash feels snappy but not subliminal.
+    public void FlashSessionCopied()
+    {
+        IsSessionCopied = true;
+        _copiedResetTimer?.Stop();
+        _copiedResetTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
+        _copiedResetTimer.Tick -= OnCopiedResetTick;
+        _copiedResetTimer.Tick += OnCopiedResetTick;
+        _copiedResetTimer.Start();
+    }
+    private void OnCopiedResetTick(object? sender, EventArgs e)
+    {
+        _copiedResetTimer?.Stop();
+        IsSessionCopied = false;
+    }
+
     public string SessionShort
     {
         get
@@ -544,6 +647,10 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     /// returns the head of the queue, or null if empty. Adjusts the recall
     /// cursor so it never points at a dequeued item. Skips blank items so
     /// that a stray empty queue entry can never surface as a silent submit.
+    ///
+    /// Also recognises the `/plan` slash command and rewraps it with strict
+    /// plan-file-editing instructions so the model updates the plan file
+    /// instead of executing work.
     private string? TryDequeueQueued()
     {
         while (QueuedMessages.Count > 0)
@@ -553,10 +660,55 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
             if (_chatRecallIndex == 0) ExitRecallMode();
             else if (_chatRecallIndex > 0) ChatRecallIndex = _chatRecallIndex - 1;
             OnChanged(nameof(HasQueuedMessages));
-            if (!string.IsNullOrWhiteSpace(head.Text))
-                return ExpandPromptForSubmission(head.Text);
+            if (string.IsNullOrWhiteSpace(head.Text)) continue;
+
+            var expanded = ExpandPromptForSubmission(head.Text);
+            if (TryParsePlanCommand(expanded, out var planBody))
+                return BuildPlanModePrompt(planBody);
+            return expanded;
         }
         return null;
+    }
+
+    private static bool TryParsePlanCommand(string text, out string body)
+    {
+        body = "";
+        if (string.IsNullOrEmpty(text)) return false;
+        var trimmed = text.TrimStart();
+        if (!trimmed.StartsWith("/plan", StringComparison.OrdinalIgnoreCase)) return false;
+        // Ensure it's a command boundary — not "/planet" or similar.
+        if (trimmed.Length > 5 && !char.IsWhiteSpace(trimmed[5])) return false;
+        body = trimmed.Length > 5 ? trimmed.Substring(6).TrimStart() : "";
+        return true;
+    }
+
+    private string BuildPlanModePrompt(string userIntent)
+    {
+        var planPath = PromptFile.Replace('\\', '/');
+        var intent = string.IsNullOrWhiteSpace(userIntent)
+            ? "(no explicit intent — review the existing plan and propose improvements)"
+            : userIntent;
+        return $@"[PLAN MODE — STRICT]
+
+You are updating the project plan file. You are NOT executing any of its tasks this turn.
+
+Plan file (the JustCode ""PLAN"" pane): `{planPath}`
+
+Do exactly this, in order:
+1. READ `{planPath}` in full using the Read tool.
+2. UNDERSTAND the update intent below.
+3. EDIT `{planPath}` in place using the Edit tool. Preserve existing sections, wording, and ordering wherever possible; only change what is necessary. If the plan is empty, write a clear structured first version with short sections (Goal, Constraints, Next Steps).
+4. After the edit lands, respond in chat with a short bullet list of the specific changes you made (added / removed / reworded).
+
+Hard rules for this turn:
+- Do NOT execute any of the plan's tasks.
+- Do NOT edit any file other than `{planPath}`.
+- Do NOT run build/test/lint commands.
+- Do NOT append a `session summary` heading — this is planning, not a work session.
+
+--- UPDATE INTENT ---
+{intent}
+";
     }
 
     // In-progress iteration estimates (reset when actual usage arrives).
@@ -660,7 +812,19 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         });
         _loopRunner.SessionCaptured += (_, sid) => Application.Current?.Dispatcher.BeginInvoke(() =>
         {
-            CurrentSessionId = sid;
+            // An empty payload means "reset" — LoopRunner fires this when it
+            // auto-recovers from a fatal error by starting a fresh session.
+            // Null out CurrentSessionId (which persists LastSessionId=null) so
+            // the next run captures a genuinely new id.
+            CurrentSessionId = string.IsNullOrEmpty(sid) ? null : sid;
+            // Fork is one-shot: once a fresh session id lands, the pending-fork
+            // pointer has done its job. Clear it so subsequent iterations
+            // behave like a normal resume.
+            if (!string.IsNullOrEmpty(_settings.PendingForkFromSessionId))
+            {
+                _settings.PendingForkFromSessionId = null;
+                PersistSettings();
+            }
         });
         _loopRunner.ToolCallInvoked += (_, _) => Application.Current?.Dispatcher.BeginInvoke(() =>
         {
@@ -733,8 +897,31 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         };
 
         _prompt = _promptStore.LoadPrompt();
+        _promptStore.ExternalChange += (_, text) =>
+            Application.Current?.Dispatcher.BeginInvoke(() => ApplyExternalPrompt(text));
+        _promptStore.Watch();
         _tasksFile.Watch(TasksFile);
         _tasksText = _tasksFile.Load();
+
+        // Populate skills eagerly so SkillsSummary reads "N skills enabled"
+        // instead of "No skills found" before the user opens the popup.
+        RefreshSkills();
+    }
+
+    /// Called when the plan file changes on disk from outside this VM (e.g.
+    /// the model edited it in /plan mode). Update the VM's view of the
+    /// prompt without re-triggering a save round-trip.
+    private bool _suppressPromptSave;
+    private void ApplyExternalPrompt(string text)
+    {
+        if (_prompt == text) return;
+        _suppressPromptSave = true;
+        try
+        {
+            _prompt = text;
+            OnChanged(nameof(Prompt));
+        }
+        finally { _suppressPromptSave = false; }
     }
 
     private void ApplyExternalTasks(string text)
@@ -787,7 +974,8 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
                 TryDequeueQueued,
                 _settings, _workingDirectory, tasksRel,
                 initialSessionId: _currentSessionId,
-                chatOnly: chatOnly);
+                chatOnly: chatOnly,
+                enabledSkillPathsProvider: GetEnabledSkillPaths);
         }
         finally
         {
@@ -890,6 +1078,7 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
             _tasksFile.Save(_tasksText);
         }
         _tasksFile.Dispose();
+        _promptStore.Dispose();
         _consoleLog.Dispose();
     }
 
