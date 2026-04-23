@@ -167,13 +167,14 @@ public sealed class PiJsonFormatter : IIterationFormatter
     private string HandleAgentEnd(JsonElement root)
     {
         // Final RALPH_STATUS parse over everything the assistant said this turn.
+        // If multiple blocks were emitted, only the last one counts.
         if (_assistantText.Length > 0)
         {
             var text = _assistantText.ToString();
-            var m = RalphStatusBlock.Match(text);
-            if (m.Success)
+            var matches = RalphStatusBlock.Matches(text);
+            if (matches.Count > 0)
             {
-                var body = m.Groups["body"].Value;
+                var body = matches[^1].Groups["body"].Value;
                 if (ExitSignalLine.IsMatch(body)) IterationExitSignal = true;
                 var sm = StatusLine.Match(body);
                 if (sm.Success) IterationStatus = sm.Groups["v"].Value.ToUpperInvariant();

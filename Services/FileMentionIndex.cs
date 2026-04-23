@@ -58,13 +58,16 @@ public sealed class FileMentionIndex
         foreach (var p in snapshot)
         {
             var lower = p.ToLowerInvariant();
+            if (!lower.Contains(q)) continue; // Early exit fast path
+
             int rank;
+            var fileName = Path.GetFileName(lower);
             if (lower == q) rank = 0;
-            else if (Path.GetFileName(lower).StartsWith(q)) rank = 1;
+            else if (fileName.StartsWith(q)) rank = 1;
             else if (lower.StartsWith(q)) rank = 2;
-            else if (Path.GetFileName(lower).Contains(q)) rank = 3;
-            else if (lower.Contains(q)) rank = 4;
-            else continue;
+            else if (fileName.Contains(q)) rank = 3;
+            else rank = 4;
+            
             results.Add((rank, p.Length, p));
         }
         return results

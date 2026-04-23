@@ -200,17 +200,10 @@ public sealed class FileExplorerViewModel : INotifyPropertyChanged
     {
         try
         {
-            if (node.IsDirectory)
-            {
-                Process.Start(new ProcessStartInfo("explorer.exe", $"\"{node.FullPath}\"")
-                {
-                    UseShellExecute = true,
-                });
-            }
-            else
-            {
-                Process.Start(new ProcessStartInfo(node.FullPath) { UseShellExecute = true });
-            }
+            var pInfo = node.IsDirectory
+                ? new ProcessStartInfo("explorer.exe", $"\"{node.FullPath}\"") { UseShellExecute = true }
+                : new ProcessStartInfo(node.FullPath) { UseShellExecute = true };
+            Process.Start(pInfo);
         }
         catch { }
     }
@@ -220,10 +213,29 @@ public sealed class FileExplorerViewModel : INotifyPropertyChanged
     {
         try
         {
-            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{node.FullPath}\"")
-            {
-                UseShellExecute = true,
-            });
+            var pInfo = new ProcessStartInfo("explorer.exe", $"/select,\"{node.FullPath}\"") { UseShellExecute = true };
+            Process.Start(pInfo);
+        }
+        catch { }
+    }
+
+    /// Copy the file's path to the clipboard.
+    public static void CopyPath(FileNode node)
+    {
+        try
+        {
+            System.Windows.Clipboard.SetText(node.FullPath);
+        }
+        catch { }
+    }
+
+    /// Copy the file's relative path to the clipboard.
+    public static void CopyRelativePath(FileNode node, string rootDir)
+    {
+        try
+        {
+            var rel = Path.GetRelativePath(rootDir, node.FullPath).Replace('\\', '/');
+            System.Windows.Clipboard.SetText(rel);
         }
         catch { }
     }

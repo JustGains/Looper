@@ -21,11 +21,11 @@ public sealed class StreamJsonFormatter : IIterationFormatter
 
     // -------- Per-iteration signals the LoopRunner reads after the turn --------
 
-    /// True if the assistant's output contains a `---RALPH_STATUS---` block
-    /// with `EXIT_SIGNAL: true`.
+    /// True if the assistant's output contains a final/last
+    /// `---RALPH_STATUS---` block with `EXIT_SIGNAL: true`.
     public bool IterationExitSignal { get; private set; }
-    /// The `STATUS:` line value inside the RALPH_STATUS block (COMPLETE,
-    /// IN_PROGRESS, BLOCKED, etc.), or null if no block was found.
+    /// The `STATUS:` line value inside the final/last RALPH_STATUS block
+    /// (COMPLETE, IN_PROGRESS, BLOCKED, etc.), or null if no block was found.
     public string? IterationStatus { get; private set; }
     /// True if the assistant asked the user a clarifying question this turn.
     public bool IterationAskedQuestion { get; private set; }
@@ -491,9 +491,9 @@ public sealed class StreamJsonFormatter : IIterationFormatter
     {
         if (_assistantText.Length == 0) return;
         var text = _assistantText.ToString();
-        var m = RalphStatusBlock.Match(text);
-        if (!m.Success) return;
-        var body = m.Groups["body"].Value;
+        var matches = RalphStatusBlock.Matches(text);
+        if (matches.Count == 0) return;
+        var body = matches[^1].Groups["body"].Value;
         if (ExitSignalLine.IsMatch(body)) IterationExitSignal = true;
         var sm = StatusLine.Match(body);
         if (sm.Success) IterationStatus = sm.Groups["v"].Value.ToUpperInvariant();

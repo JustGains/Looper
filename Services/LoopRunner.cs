@@ -205,16 +205,36 @@ public sealed class LoopRunner
                     continue;
                 }
 
+                // Re-read task state after the CLI turn so exit gating uses
+                // the latest checkbox counts, not the pre-iteration snapshot.
+                var postStats = ReadTaskStats(workingDirectory, tasksRelativePath);
+                TaskStatsUpdated?.Invoke(this, (postStats.Open, postStats.Closed));
+
                 // --- Post-iteration signal collection ---
                 var f = _formatter;
                 bool exitRequested = false;
                 bool fatalError = false;
+                string? ignoredExitReason = null;
                 if (f != null)
                 {
                     if (f.IterationExitSignal)
                     {
-                        exitRequested = true;
-                        ExitSignalReceived?.Invoke(this, f.IterationStatus ?? "COMPLETE");
+                        var status = f.IterationStatus?.ToUpperInvariant();
+                        if (string.Equals(status, "COMPLETE", StringComparison.Ordinal) && postStats.Open == 0)
+                        {
+                            exitRequested = true;
+                            ExitSignalReceived?.Invoke(this, "COMPLETE");
+                        }
+                        else
+                        {
+                            ignoredExitReason = status switch
+                            {
+                                "COMPLETE" => $"tasks.md still has {postStats.Open} open task{(postStats.Open == 1 ? "" : "s")}",
+                                null or "" => "the final RALPH_STATUS block did not include STATUS: COMPLETE",
+                                _ => $"the final RALPH_STATUS block reported STATUS={status} instead of COMPLETE"
+                            };
+                            carryGuidance.Add("The previous iteration requested EXIT_SIGNAL:true too early. Only exit when the final RALPH_STATUS block says STATUS: COMPLETE and `tasks.md` has zero open checkboxes.");
+                        }
                     }
                     if (f.IterationFatalError)
                     {
@@ -297,10 +317,12 @@ public sealed class LoopRunner
                 // Early exit on explicit model signal.
                 if (exitRequested)
                 {
-                    Output?.Invoke(this, $"[justcode] model reported EXIT_SIGNAL (status={f!.IterationStatus ?? "?"}) — ending loop.\n");
+                    Output?.Invoke(this, $"[justcode] model reported EXIT_SIGNAL (status={f!.IterationStatus ?? "?"}, open tasks={postStats.Open}) — ending loop.\n");
                     Status?.Invoke(this, "Completed");
                     return;
                 }
+                if (!string.IsNullOrEmpty(ignoredExitReason))
+                    Output?.Invoke(this, $"[justcode] ignoring EXIT_SIGNAL — {ignoredExitReason}.\n");
 
                 if (!isQueued) iter++;
             }
@@ -421,7 +443,7 @@ EXIT_SIGNAL: <true|false>
 STATUS: <COMPLETE|IN_PROGRESS|BLOCKED>
 ---RALPH_STATUS---
 
-Set EXIT_SIGNAL to true **only** when the user's goal is fully achieved or you are genuinely stuck and further iterations can't help. Otherwise set it to false so the loop continues.{guidanceBlock}{summaryBlock}
+Set EXIT_SIGNAL to true **only** when the user's goal is fully achieved, `STATUS: COMPLETE`, and `{tp}` has zero open checkboxes. If any tasks remain open, set `EXIT_SIGNAL: false`. Otherwise set it to false so the loop continues.{guidanceBlock}{summaryBlock}
 --- USER PROMPT ---
 {userPrompt}
 ";

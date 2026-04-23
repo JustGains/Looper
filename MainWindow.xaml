@@ -408,7 +408,7 @@
             <Style TargetType="ComboBoxItem">
                 <Setter Property="Background" Value="Transparent"/>
                 <Setter Property="Foreground" Value="{StaticResource FgPrimary}"/>
-                <Setter Property="Padding" Value="10,5"/>
+                <Setter Property="Padding" Value="12,6"/>
                 <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
                 <Setter Property="SnapsToDevicePixels" Value="True"/>
                 <Setter Property="Template">
@@ -1338,7 +1338,7 @@
                                 Padding="10,6">
                             <DockPanel LastChildFill="False">
                                 <TextBlock Style="{StaticResource PaneHeader}" Text="FILES"
-                                           ToolTip="{Binding HeaderTooltip}"/>
+                                           ToolTip="{Binding HeaderTooltip}" Margin="0,0,0,4"/>
                                 <Button DockPanel.Dock="Right" Click="FilesRefresh_Click"
                                         ToolTip="Refresh file tree"
                                         Background="Transparent" BorderThickness="0"
@@ -3102,7 +3102,7 @@
                     <!-- EXIT SIGNAL -->
                     <Border Style="{StaticResource StatusPillOk}"
                             Visibility="{Binding ExitStatusVisible, Converter={StaticResource BoolToVis}}"
-                            ToolTip="Model emitted EXIT_SIGNAL=true — loop ended early.">
+                            ToolTip="Last RALPH_STATUS block emitted EXIT_SIGNAL=true with STATUS=COMPLETE and no open tasks — loop ended early.">
                         <StackPanel Orientation="Horizontal">
                             <Ellipse Style="{StaticResource PillDot}" Fill="{StaticResource AccentEmerald}"/>
                             <TextBlock Style="{StaticResource PillLabel}"

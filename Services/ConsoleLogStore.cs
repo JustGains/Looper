@@ -3,9 +3,11 @@ using System.Windows.Threading;
 
 namespace JustCode.Services;
 
+/// <summary>
 /// Rolling per-conversation console history. Appends raw chunks, keeps the
 /// last N complete lines on disk, and restores them on load so each
 /// conversation's console survives restarts.
+/// </summary>
 public sealed class ConsoleLogStore : IDisposable
 {
     private const int MaxLines = 500;
@@ -89,7 +91,7 @@ public sealed class ConsoleLogStore : IDisposable
 
     private string Render()
     {
-        var body = string.Join("\n", _lines);
+        var body = string.Join('\n', _lines);
         if (_lines.Count == 0) return _partial;
         return body + (string.IsNullOrEmpty(_partial) ? "" : "\n" + _partial);
     }

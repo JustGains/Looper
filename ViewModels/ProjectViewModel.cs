@@ -23,7 +23,7 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
     {
         get
         {
-            var trimmed = WorkingDirectory.TrimEnd('\\', '/');
+            var trimmed = WorkingDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             var leaf = Path.GetFileName(trimmed);
             return string.IsNullOrEmpty(leaf) ? trimmed : leaf;
         }

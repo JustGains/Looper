@@ -28,12 +28,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set
         {
             if (ReferenceEquals(_selectedProject, value)) return;
+            var previous = _selectedProject;
+            _selectedProject = value;
+            
             // Deactivate tab polling on the project we're leaving so its
             // Git watcher / timer stop immediately — multiple projects would
             // otherwise all keep ticking in the background.
-            _selectedProject?.SetIsSelected(false);
-            _selectedProject = value;
+            previous?.SetIsSelected(false);
             value?.SetIsSelected(true);
+            
             Settings.ActiveProject = value?.WorkingDirectory;
             SaveConfig();
             OnChanged();
