@@ -5,6 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:JustCode"
         xmlns:models="clr-namespace:JustCode.Models"
+        xmlns:vm="clr-namespace:JustCode.ViewModels"
         xmlns:md="clr-namespace:Markdig.Wpf;assembly=Markdig.Wpf"
         mc:Ignorable="d"
         Title="{Binding SelectedProject.WorkingDirectory, StringFormat='JustCode — {0}', FallbackValue='JustCode', TargetNullValue='JustCode'}"
@@ -1842,193 +1843,188 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- Changes list (scrollable main body) -->
-                        <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled"
-                                      Background="Transparent">
-                            <StackPanel Margin="0,4,0,8">
-                                <!-- STAGED -->
-                                <DockPanel Margin="8,4,8,2" LastChildFill="False">
-                                    <TextBlock DockPanel.Dock="Left"
-                                               Text="STAGED CHANGES"
-                                               FontSize="10" FontWeight="SemiBold"
-                                               Foreground="{StaticResource FgDim}"
-                                               VerticalAlignment="Center"/>
-                                    <TextBlock DockPanel.Dock="Left"
-                                               Text="{Binding StagedChanges.Count, StringFormat=({0})}"
-                                               FontSize="10"
-                                               Foreground="{StaticResource FgDim}"
-                                               VerticalAlignment="Center" Margin="4,0,0,0"/>
-                                    <Button DockPanel.Dock="Right"
-                                            Click="GitUnstageAll_Click"
-                                            Style="{StaticResource GitIconButton}"
-                                            ToolTip="Unstage all">
-                                        <TextBlock Text="−" FontSize="12" FontWeight="Bold"/>
-                                    </Button>
-                                </DockPanel>
-                                <ItemsControl ItemsSource="{Binding StagedChanges}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Border Style="{StaticResource GitFileRowBorder}"
-                                                    MouseLeftButtonUp="GitStagedRow_MouseDown"
-                                                    ToolTip="{Binding FullPath}">
-                                                <DockPanel LastChildFill="True">
-                                                    <Button DockPanel.Dock="Right"
-                                                            Click="GitUnstage_Click" Tag="{Binding}"
-                                                            Style="{StaticResource GitRowActionButton}"
-                                                            ToolTip="Unstage">
-                                                        <TextBlock Text="−" FontSize="12" FontWeight="Bold"/>
-                                                    </Button>
-                                                    <TextBlock DockPanel.Dock="Right"
-                                                               Text="{Binding StatusLetter}"
-                                                               Foreground="{Binding StatusBrush}"
-                                                               FontFamily="Cascadia Code, Cascadia Mono, Consolas"
-                                                               FontSize="11" FontWeight="SemiBold"
-                                                               Width="14" TextAlignment="Center"
-                                                               VerticalAlignment="Center"
-                                                               Margin="4,0,6,0"/>
-                                                    <Border DockPanel.Dock="Left"
-                                                            Width="18" Height="18"
-                                                            Margin="0,0,6,0"
-                                                            Background="#202228"
-                                                            BorderBrush="#31343a"
-                                                            BorderThickness="1"
-                                                            CornerRadius="4"
-                                                            VerticalAlignment="Center">
-                                                        <Image Source="{Binding Icon}"
-                                                               Width="16" Height="16"
-                                                               VerticalAlignment="Center"
-                                                               HorizontalAlignment="Center"
-                                                               RenderOptions.BitmapScalingMode="HighQuality"/>
-                                                    </Border>
-                                                    <TextBlock Text="{Binding FileName}"
-                                                               Foreground="{StaticResource FgPrimary}"
-                                                               FontSize="12"
-                                                               VerticalAlignment="Center"
-                                                               TextTrimming="CharacterEllipsis"/>
-                                                </DockPanel>
-                                            </Border>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
+                        <!-- Changes list + recent commits.
+                             Changes are rendered by a single virtualizing
+                             ItemsControl bound to AllRows (headers + rows
+                             interleaved). The previous design — two
+                             ItemsControls inside a StackPanel inside a
+                             ScrollViewer — gave the inner panels infinite
+                             measure height, which silently disabled
+                             virtualization and froze the app when a repo had
+                             hundreds of changed files. -->
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
 
-                                <!-- CHANGES (unstaged) -->
-                                <DockPanel Margin="8,10,8,2" LastChildFill="False">
-                                    <TextBlock DockPanel.Dock="Left"
-                                               Text="CHANGES"
-                                               FontSize="10" FontWeight="SemiBold"
-                                               Foreground="{StaticResource FgDim}"
-                                               VerticalAlignment="Center"/>
-                                    <TextBlock DockPanel.Dock="Left"
-                                               Text="{Binding UnstagedChanges.Count, StringFormat=({0})}"
-                                               FontSize="10"
-                                               Foreground="{StaticResource FgDim}"
-                                               VerticalAlignment="Center" Margin="4,0,0,0"/>
-                                    <Button DockPanel.Dock="Right"
-                                            Click="GitStageAll_Click"
-                                            Style="{StaticResource GitIconButton}"
-                                            ToolTip="Stage all">
-                                        <TextBlock Text="+" FontSize="12" FontWeight="Bold"/>
-                                    </Button>
-                                </DockPanel>
-                                <ItemsControl ItemsSource="{Binding UnstagedChanges}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Border Style="{StaticResource GitFileRowBorder}"
-                                                    MouseLeftButtonUp="GitUnstagedRow_MouseDown"
-                                                    ToolTip="{Binding FullPath}">
-                                                <DockPanel LastChildFill="True">
-                                                    <Button DockPanel.Dock="Right"
-                                                            Click="GitStage_Click" Tag="{Binding}"
-                                                            Style="{StaticResource GitRowActionButton}"
-                                                            ToolTip="Stage">
-                                                        <TextBlock Text="+" FontSize="12" FontWeight="Bold"/>
-                                                    </Button>
-                                                    <Button DockPanel.Dock="Right"
-                                                            Click="GitDiscard_Click" Tag="{Binding}"
-                                                            Style="{StaticResource GitRowActionButton}"
-                                                            ToolTip="Discard changes">
-                                                        <TextBlock Text="⟲" FontSize="11"/>
-                                                    </Button>
-                                                    <TextBlock DockPanel.Dock="Right"
-                                                               Text="{Binding StatusLetter}"
-                                                               Foreground="{Binding StatusBrush}"
-                                                               FontFamily="Cascadia Code, Cascadia Mono, Consolas"
-                                                               FontSize="11" FontWeight="SemiBold"
-                                                               Width="14" TextAlignment="Center"
-                                                               VerticalAlignment="Center"
-                                                               Margin="4,0,6,0"/>
-                                                    <Border DockPanel.Dock="Left"
-                                                            Width="18" Height="18"
-                                                            Margin="0,0,6,0"
-                                                            Background="#202228"
-                                                            BorderBrush="#31343a"
-                                                            BorderThickness="1"
-                                                            CornerRadius="4"
-                                                            VerticalAlignment="Center">
-                                                        <Image Source="{Binding Icon}"
-                                                               Width="16" Height="16"
-                                                               VerticalAlignment="Center"
-                                                               HorizontalAlignment="Center"
-                                                               RenderOptions.BitmapScalingMode="HighQuality"/>
-                                                    </Border>
-                                                    <TextBlock Text="{Binding FileName}"
-                                                               Foreground="{StaticResource FgPrimary}"
-                                                               FontSize="12"
-                                                               VerticalAlignment="Center"
-                                                               TextTrimming="CharacterEllipsis"/>
-                                                </DockPanel>
-                                            </Border>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
+                            <ItemsControl Grid.Row="0"
+                                          ItemsSource="{Binding AllRows}"
+                                          VirtualizingPanel.IsVirtualizing="True"
+                                          VirtualizingPanel.VirtualizationMode="Recycling"
+                                          VirtualizingPanel.ScrollUnit="Pixel"
+                                          ScrollViewer.CanContentScroll="True">
+                                <ItemsControl.Template>
+                                    <ControlTemplate TargetType="ItemsControl">
+                                        <ScrollViewer CanContentScroll="True"
+                                                      HorizontalScrollBarVisibility="Disabled"
+                                                      VerticalScrollBarVisibility="Auto"
+                                                      Background="Transparent"
+                                                      Padding="0,4,0,8">
+                                            <ItemsPresenter/>
+                                        </ScrollViewer>
+                                    </ControlTemplate>
+                                </ItemsControl.Template>
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <VirtualizingStackPanel/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.Resources>
 
-                                <!-- RECENT COMMITS -->
-                                <TextBlock Text="RECENT COMMITS"
+                                    <!-- Section header (STAGED CHANGES / CHANGES) -->
+                                    <DataTemplate DataType="{x:Type vm:GitSectionHeader}">
+                                        <DockPanel Margin="8,6,8,2" LastChildFill="False">
+                                            <TextBlock DockPanel.Dock="Left"
+                                                       Text="{Binding Label}"
+                                                       FontSize="10" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource FgDim}"
+                                                       VerticalAlignment="Center"/>
+                                            <TextBlock DockPanel.Dock="Left"
+                                                       Text="{Binding CountLabel}"
+                                                       FontSize="10"
+                                                       Foreground="{StaticResource FgDim}"
+                                                       VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                            <Button DockPanel.Dock="Right"
+                                                    Click="GitUnstageAll_Click"
+                                                    Style="{StaticResource GitIconButton}"
+                                                    Visibility="{Binding IsStaged, Converter={StaticResource BoolToVis}}"
+                                                    ToolTip="Unstage all">
+                                                <TextBlock Text="−" FontSize="12" FontWeight="Bold"/>
+                                            </Button>
+                                            <Button DockPanel.Dock="Right"
+                                                    Click="GitStageAll_Click"
+                                                    Style="{StaticResource GitIconButton}"
+                                                    Visibility="{Binding IsUnstaged, Converter={StaticResource BoolToVis}}"
+                                                    ToolTip="Stage all">
+                                                <TextBlock Text="+" FontSize="12" FontWeight="Bold"/>
+                                            </Button>
+                                        </DockPanel>
+                                    </DataTemplate>
+
+                                    <!-- File row (staged or unstaged; per-row buttons
+                                         toggle via IsStagedGroup / IsUnstagedGroup) -->
+                                    <DataTemplate DataType="{x:Type vm:GitFileRow}">
+                                        <Border Style="{StaticResource GitFileRowBorder}"
+                                                MouseLeftButtonUp="GitStagedRow_MouseDown"
+                                                ToolTip="{Binding FullPath}">
+                                            <DockPanel LastChildFill="True">
+                                                <Button DockPanel.Dock="Right"
+                                                        Click="GitUnstage_Click" Tag="{Binding}"
+                                                        Style="{StaticResource GitRowActionButton}"
+                                                        Visibility="{Binding IsStagedGroup, Converter={StaticResource BoolToVis}}"
+                                                        ToolTip="Unstage">
+                                                    <TextBlock Text="−" FontSize="12" FontWeight="Bold"/>
+                                                </Button>
+                                                <Button DockPanel.Dock="Right"
+                                                        Click="GitStage_Click" Tag="{Binding}"
+                                                        Style="{StaticResource GitRowActionButton}"
+                                                        Visibility="{Binding IsUnstagedGroup, Converter={StaticResource BoolToVis}}"
+                                                        ToolTip="Stage">
+                                                    <TextBlock Text="+" FontSize="12" FontWeight="Bold"/>
+                                                </Button>
+                                                <Button DockPanel.Dock="Right"
+                                                        Click="GitDiscard_Click" Tag="{Binding}"
+                                                        Style="{StaticResource GitRowActionButton}"
+                                                        Visibility="{Binding IsUnstagedGroup, Converter={StaticResource BoolToVis}}"
+                                                        ToolTip="Discard changes">
+                                                    <TextBlock Text="⟲" FontSize="11"/>
+                                                </Button>
+                                                <TextBlock DockPanel.Dock="Right"
+                                                           Text="{Binding StatusLetter}"
+                                                           Foreground="{Binding StatusBrush}"
+                                                           FontFamily="Cascadia Code, Cascadia Mono, Consolas"
+                                                           FontSize="11" FontWeight="SemiBold"
+                                                           Width="14" TextAlignment="Center"
+                                                           VerticalAlignment="Center"
+                                                           Margin="4,0,6,0"/>
+                                                <Border DockPanel.Dock="Left"
+                                                        Width="18" Height="18"
+                                                        Margin="0,0,6,0"
+                                                        Background="#202228"
+                                                        BorderBrush="#31343a"
+                                                        BorderThickness="1"
+                                                        CornerRadius="4"
+                                                        VerticalAlignment="Center">
+                                                    <Image Source="{Binding Icon}"
+                                                           Width="16" Height="16"
+                                                           VerticalAlignment="Center"
+                                                           HorizontalAlignment="Center"
+                                                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                </Border>
+                                                <TextBlock Text="{Binding FileName}"
+                                                           Foreground="{StaticResource FgPrimary}"
+                                                           FontSize="12"
+                                                           VerticalAlignment="Center"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                            </DockPanel>
+                                        </Border>
+                                    </DataTemplate>
+
+                                </ItemsControl.Resources>
+                            </ItemsControl>
+
+                            <!-- Recent commits — capped at 30, own small scroll area -->
+                            <DockPanel Grid.Row="1" LastChildFill="True" MaxHeight="220">
+                                <TextBlock DockPanel.Dock="Top"
+                                           Text="RECENT COMMITS"
                                            FontSize="10" FontWeight="SemiBold"
                                            Foreground="{StaticResource FgDim}"
-                                           Margin="12,14,8,4"/>
-                                <ItemsControl ItemsSource="{Binding RecentCommits}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Border Padding="8,4" Margin="4,1"
-                                                    Background="Transparent" CornerRadius="3"
-                                                    ToolTip="{Binding Hash}">
-                                                <Border.Style>
-                                                    <Style TargetType="Border">
-                                                        <Style.Triggers>
-                                                            <Trigger Property="IsMouseOver" Value="True">
-                                                                <Setter Property="Background" Value="#2b2b30"/>
-                                                            </Trigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Border.Style>
-                                                <DockPanel LastChildFill="True">
-                                                    <TextBlock DockPanel.Dock="Left"
-                                                               Text="{Binding ShortHash}"
-                                                               FontFamily="Cascadia Code, Cascadia Mono, Consolas"
-                                                               FontSize="10"
-                                                               Foreground="{StaticResource FgAccent}"
-                                                               VerticalAlignment="Center"
-                                                               Margin="0,0,8,0"/>
-                                                    <TextBlock DockPanel.Dock="Right"
-                                                               Text="{Binding Author}"
-                                                               FontSize="10"
-                                                               Foreground="{StaticResource FgDim}"
-                                                               VerticalAlignment="Center"
-                                                               Margin="8,0,0,0"/>
-                                                    <TextBlock Text="{Binding Subject}"
-                                                               Foreground="{StaticResource FgPrimary}"
-                                                               FontSize="11"
-                                                               VerticalAlignment="Center"
-                                                               TextTrimming="CharacterEllipsis"/>
-                                                </DockPanel>
-                                            </Border>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </StackPanel>
-                        </ScrollViewer>
+                                           Margin="12,10,8,4"/>
+                                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsControl ItemsSource="{Binding RecentCommits}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Padding="8,4" Margin="4,1"
+                                                        Background="Transparent" CornerRadius="3"
+                                                        ToolTip="{Binding Hash}">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
+                                                            <Style.Triggers>
+                                                                <Trigger Property="IsMouseOver" Value="True">
+                                                                    <Setter Property="Background" Value="#2b2b30"/>
+                                                                </Trigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Border.Style>
+                                                    <DockPanel LastChildFill="True">
+                                                        <TextBlock DockPanel.Dock="Left"
+                                                                   Text="{Binding ShortHash}"
+                                                                   FontFamily="Cascadia Code, Cascadia Mono, Consolas"
+                                                                   FontSize="10"
+                                                                   Foreground="{StaticResource FgAccent}"
+                                                                   VerticalAlignment="Center"
+                                                                   Margin="0,0,8,0"/>
+                                                        <TextBlock DockPanel.Dock="Right"
+                                                                   Text="{Binding Author}"
+                                                                   FontSize="10"
+                                                                   Foreground="{StaticResource FgDim}"
+                                                                   VerticalAlignment="Center"
+                                                                   Margin="8,0,0,0"/>
+                                                        <TextBlock Text="{Binding Subject}"
+                                                                   Foreground="{StaticResource FgPrimary}"
+                                                                   FontSize="11"
+                                                                   VerticalAlignment="Center"
+                                                                   TextTrimming="CharacterEllipsis"/>
+                                                    </DockPanel>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </DockPanel>
+                        </Grid>
                     </DockPanel>
                 </Grid>
             </Border>

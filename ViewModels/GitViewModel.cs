@@ -11,12 +11,38 @@ using JustCode.Services;
 
 namespace JustCode.ViewModels;
 
+public enum GitSectionKind { Staged, Unstaged }
+
+public sealed class GitSectionHeader : INotifyPropertyChanged
+{
+    public event PropertyChangedEventHandler? PropertyChanged;
+    public string Label { get; init; } = "";
+    public GitSectionKind Kind { get; init; }
+    public bool IsStaged => Kind == GitSectionKind.Staged;
+    public bool IsUnstaged => Kind == GitSectionKind.Unstaged;
+
+    private int _count;
+    public int Count
+    {
+        get => _count;
+        set
+        {
+            if (_count == value) return;
+            _count = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Count)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CountLabel)));
+        }
+    }
+    public string CountLabel => $"({_count})";
+}
+
 public sealed class GitFileRow : INotifyPropertyChanged
 {
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public GitFileChange Change { get; }
     public bool IsStagedGroup { get; }
+    public bool IsUnstagedGroup => !IsStagedGroup;
     public string FileName => System.IO.Path.GetFileName(Change.Path);
     public string FullPath => Change.Path;
 
@@ -122,6 +148,15 @@ public sealed class GitViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<GitFileRow> UnstagedChanges { get; } = new();
     public ObservableCollection<GitCommit> RecentCommits { get; } = new();
     public ObservableCollection<string> Branches { get; } = new();
+
+    // Flat, virtualization-friendly view of both change sections. The panel
+    // binds a single ItemsControl to this list so the WPF VirtualizingStackPanel
+    // can actually virtualize; with two separate ItemsControls stacked in a
+    // StackPanel the inner panels got infinite measure height and materialized
+    // every row, which froze the UI whenever a repo had hundreds of changes.
+    private readonly GitSectionHeader _stagedHeader = new() { Label = "STAGED CHANGES", Kind = GitSectionKind.Staged };
+    private readonly GitSectionHeader _unstagedHeader = new() { Label = "CHANGES", Kind = GitSectionKind.Unstaged };
+    public ObservableCollection<object> AllRows { get; } = new();
 
     public bool IsRepo => GitService.IsRepo(_workingDirectory);
 
@@ -326,9 +361,41 @@ public sealed class GitViewModel : INotifyPropertyChanged, IDisposable
 
                 SyncStrings(Branches, branches);
                 SyncCommits(RecentCommits, commits);
+                RebuildAllRows();
             });
         }
         catch (Exception ex) { SetError(ex.Message); }
+    }
+
+    // Compose AllRows = [stagedHeader?, ...StagedChanges, unstagedHeader?, ...UnstagedChanges].
+    // Reference-equality fast path so quiet refreshes are a no-op and virtualized
+    // containers aren't torn down unnecessarily.
+    private void RebuildAllRows()
+    {
+        _stagedHeader.Count = StagedChanges.Count;
+        _unstagedHeader.Count = UnstagedChanges.Count;
+
+        var next = new List<object>(2 + StagedChanges.Count + UnstagedChanges.Count);
+        if (StagedChanges.Count > 0)
+        {
+            next.Add(_stagedHeader);
+            foreach (var r in StagedChanges) next.Add(r);
+        }
+        if (UnstagedChanges.Count > 0)
+        {
+            next.Add(_unstagedHeader);
+            foreach (var r in UnstagedChanges) next.Add(r);
+        }
+
+        if (AllRows.Count == next.Count)
+        {
+            bool same = true;
+            for (int i = 0; i < next.Count; i++)
+                if (!ReferenceEquals(AllRows[i], next[i])) { same = false; break; }
+            if (same) return;
+        }
+        AllRows.Clear();
+        foreach (var o in next) AllRows.Add(o);
     }
 
     /// In-place sync for the staged/unstaged file lists. Identity is
