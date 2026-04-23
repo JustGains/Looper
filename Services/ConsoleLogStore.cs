@@ -66,16 +66,15 @@ public sealed class ConsoleLogStore : IDisposable
 
     public void Flush()
     {
-        lock (_lock)
+        string content;
+        lock (_lock) { content = Render(); }
+        try
         {
-            try
-            {
-                var dir = Path.GetDirectoryName(_path);
-                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-                File.WriteAllText(_path, Render());
-            }
-            catch { }
+            var dir = Path.GetDirectoryName(_path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(_path, content);
         }
+        catch { }
     }
 
     public void Clear()

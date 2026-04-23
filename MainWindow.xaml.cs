@@ -1395,8 +1395,7 @@ public partial class MainWindow : Window
 
     private void FileNodeCopyPath_Click(object sender, RoutedEventArgs e)
     {
-        if (GetContextFileNode(sender) is { } n)
-            try { Clipboard.SetText(n.FullPath); } catch { }
+        if (GetContextFileNode(sender) is { } n) FileExplorerViewModel.CopyPath(n);
     }
 
     private void FileNodeCopyRelPath_Click(object sender, RoutedEventArgs e)
@@ -1404,12 +1403,22 @@ public partial class MainWindow : Window
         var n = GetContextFileNode(sender);
         var wd = _vm.SelectedProject?.WorkingDirectory;
         if (n == null || string.IsNullOrEmpty(wd)) return;
-        try
-        {
-            var rel = Path.GetRelativePath(wd, n.FullPath).Replace('\\', '/');
-            Clipboard.SetText(rel);
-        }
-        catch { }
+        FileExplorerViewModel.CopyRelativePath(n, wd);
+    }
+
+    private void FileNodeCopyFileName_Click(object sender, RoutedEventArgs e)
+    {
+        if (GetContextFileNode(sender) is { } n) FileExplorerViewModel.CopyFileName(n);
+    }
+
+    private void FileNodeOpenTerminal_Click(object sender, RoutedEventArgs e)
+    {
+        if (GetContextFileNode(sender) is { } n) FileExplorerViewModel.OpenTerminalHere(n);
+    }
+
+    private void FileNodeCopyContent_Click(object sender, RoutedEventArgs e)
+    {
+        if (GetContextFileNode(sender) is { } n) FileExplorerViewModel.CopyFileContent(n);
     }
 
     // ---------- Git panel ----------

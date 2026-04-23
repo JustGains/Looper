@@ -83,6 +83,9 @@ public sealed class FileNode : INotifyPropertyChanged
         if (dispatcher == null) return;
         await dispatcher.InvokeAsync(() =>
         {
+            // Guard against stale results if expand/collapse toggled while the
+            // icon was loading on the thread pool.
+            if (isDir && isExpanded != IsExpanded) return;
             _icon = img;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Icon)));
         });
@@ -104,18 +107,17 @@ public sealed class FileNode : INotifyPropertyChanged
 
     private void LoadChildren()
     {
-        _loaded = true;
         Children.Clear();
         try
         {
-            var dirs = Directory.EnumerateDirectories(FullPath)
-                .Where(d => !IsSkipped(Path.GetFileName(d) ?? ""))
-                .OrderBy(d => d, StringComparer.OrdinalIgnoreCase);
-            foreach (var d in dirs)
+            foreach (var d in Directory.EnumerateDirectories(FullPath)
+                .OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
             {
+                var name = Path.GetFileName(d) ?? "";
+                if (IsSkipped(name)) continue;
                 var child = new FileNode
                 {
-                    Name = Path.GetFileName(d) ?? d,
+                    Name = name,
                     FullPath = d,
                     IsDirectory = true,
                 };
@@ -123,9 +125,8 @@ public sealed class FileNode : INotifyPropertyChanged
                 Children.Add(child);
             }
 
-            var files = Directory.EnumerateFiles(FullPath)
-                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
-            foreach (var f in files)
+            foreach (var f in Directory.EnumerateFiles(FullPath)
+                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
             {
                 Children.Add(new FileNode
                 {
@@ -134,6 +135,7 @@ public sealed class FileNode : INotifyPropertyChanged
                     IsDirectory = false,
                 });
             }
+            _loaded = true;
         }
         catch
         {
@@ -194,40 +196,27 @@ public sealed class FileExplorerViewModel : INotifyPropertyChanged
         OnChanged(nameof(Roots));
     }
 
+    /// Reveal the node's parent in Explorer with the item pre-selected.
+    public static void RevealInExplorer(FileNode node)
+        => SafeProcess.Start("explorer.exe", $"/select,\"{node.FullPath}\"");
+
     /// Open a file with the OS default handler. Directories are revealed in
     /// Explorer; files are shell-executed (respects user's default association).
     public static void Open(FileNode node)
     {
-        try
-        {
-            var pInfo = node.IsDirectory
-                ? new ProcessStartInfo("explorer.exe", $"\"{node.FullPath}\"") { UseShellExecute = true }
-                : new ProcessStartInfo(node.FullPath) { UseShellExecute = true };
-            Process.Start(pInfo);
-        }
-        catch { }
+        if (node.IsDirectory)
+            SafeProcess.Start("explorer.exe", $"\"{node.FullPath}\"");
+        else
+            SafeProcess.Start(node.FullPath);
     }
 
-    /// Reveal the node's parent in Explorer with the item pre-selected.
-    public static void RevealInExplorer(FileNode node)
+    private static void TrySetClipboard(string text)
     {
-        try
-        {
-            var pInfo = new ProcessStartInfo("explorer.exe", $"/select,\"{node.FullPath}\"") { UseShellExecute = true };
-            Process.Start(pInfo);
-        }
-        catch { }
+        try { System.Windows.Clipboard.SetText(text); } catch { }
     }
 
     /// Copy the file's path to the clipboard.
-    public static void CopyPath(FileNode node)
-    {
-        try
-        {
-            System.Windows.Clipboard.SetText(node.FullPath);
-        }
-        catch { }
-    }
+    public static void CopyPath(FileNode node) => TrySetClipboard(node.FullPath);
 
     /// Copy the file's relative path to the clipboard.
     public static void CopyRelativePath(FileNode node, string rootDir)
@@ -235,9 +224,36 @@ public sealed class FileExplorerViewModel : INotifyPropertyChanged
         try
         {
             var rel = Path.GetRelativePath(rootDir, node.FullPath).Replace('\\', '/');
-            System.Windows.Clipboard.SetText(rel);
+            TrySetClipboard(rel);
         }
         catch { }
+    }
+
+    /// Copy the file's name (leaf) to the clipboard.
+    public static void CopyFileName(FileNode node) => TrySetClipboard(node.Name);
+
+    /// Copy the text content of a file to the clipboard (skip if too large).
+    public static void CopyFileContent(FileNode node, int maxBytes = 100_000)
+    {
+        try
+        {
+            if (node.IsDirectory) return;
+            var info = new FileInfo(node.FullPath);
+            if (!info.Exists || info.Length > maxBytes) return;
+            var text = File.ReadAllText(node.FullPath);
+            TrySetClipboard(text);
+        }
+        catch { }
+    }
+
+    /// Open Windows Terminal in the node's directory.
+    public static void OpenTerminalHere(FileNode node)
+    {
+        var dir = node.IsDirectory ? node.FullPath : Path.GetDirectoryName(node.FullPath);
+        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
+        SafeProcess.Start("wt.exe", $"-d \"{dir}\"");
+        // Fallback if Windows Terminal is not installed.
+        SafeProcess.Start("cmd.exe", $"/K cd /d \"{dir}\"");
     }
 
     private void OnChanged([CallerMemberName] string? name = null)

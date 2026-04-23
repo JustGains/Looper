@@ -254,12 +254,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var dir = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             if (!File.Exists(path)) _configStore.Save(Settings);
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "notepad.exe",
-                Arguments = $"\"{path}\"",
-                UseShellExecute = true,
-            });
+            Services.SafeProcess.Start("notepad.exe", $"\"{path}\"");
         }
         catch { }
     }

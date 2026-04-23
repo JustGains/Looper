@@ -82,7 +82,7 @@ public sealed class FileMentionIndex
     public static string QuoteIfNeeded(string path)
     {
         if (string.IsNullOrEmpty(path)) return path;
-        return path.Any(c => c is ' ' or '\t') ? $"\"{path}\"" : path;
+        return path.AsSpan().IndexOfAny(" \t") >= 0 ? $"\"{path}\"" : path;
     }
 
     private void Build()
