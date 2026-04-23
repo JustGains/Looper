@@ -59,7 +59,7 @@ public sealed class LoopRunner
             Output?.Invoke(this, chunk);
     }
 
-    public async Task RunAsync(Func<string> promptProvider, Func<string?> tryDequeueQueued, ConversationSettings settings, string workingDirectory, string tasksRelativePath, string? initialSessionId = null, bool chatOnly = false, Func<IReadOnlyList<string>>? enabledSkillPathsProvider = null)
+    public async Task RunAsync(Func<string> promptProvider, Func<string?> tryDequeueQueued, ConversationSettings settings, string workingDirectory, string tasksRelativePath, string? initialSessionId = null, bool chatOnly = false, Func<IReadOnlyList<string>>? enabledSkillPathsProvider = null, bool forceContinueSession = false)
     {
         if (IsRunning) return;
 
@@ -173,6 +173,7 @@ public sealed class LoopRunner
                 // (via `--continue` / `exec resume --last`) would silently hop
                 // into another conversation's session — so never do that.
                 var continueSession = doFork
+                    || (forceContinueSession && !string.IsNullOrEmpty(_capturedSessionId))
                     || (settings.KeepContext && !string.IsNullOrEmpty(_capturedSessionId));
                 var runSessionId = forkFromId ?? _capturedSessionId;
                 try

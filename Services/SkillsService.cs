@@ -40,12 +40,32 @@ public static class SkillsService
         return System.IO.Path.Combine(home, ".pi", "agent", "skills");
     }
 
+    // Cache discovery results per working-dir for a short window. Callers like
+    // ConversationViewModel.GetEnabledSkillPaths and RefreshSkills re-enter
+    // Discover on the hot path (every run start, every popup open, and used
+    // to be called in every conv ctor). Walking 4 dirs + reading first lines
+    // of N SKILL.md files isn't free when multiplied by N conversations.
+    private const int CacheTtlMs = 1500;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime At, List<SkillEntry> Value)> _discoverCache
+        = new(StringComparer.OrdinalIgnoreCase);
+    private static bool _seedChecked;
+
     /// Enumerate every skill found under every root. If the same skill name
     /// appears in multiple roots the first occurrence (Pi's resolution order)
     /// wins and shadowed copies are dropped — mirrors how Pi actually loads.
     public static List<SkillEntry> Discover(string? workingDirectory)
     {
-        EnsureAndroidSkillSeeded();
+        // Seed the android-mcp skill exactly once per process — not on every
+        // Discover call. It's idempotent on disk but the File.Exists check
+        // was happening for every conversation ctor.
+        if (!_seedChecked) { _seedChecked = true; EnsureAndroidSkillSeeded(); }
+
+        var cacheKey = workingDirectory ?? "";
+        if (_discoverCache.TryGetValue(cacheKey, out var entry)
+            && (DateTime.UtcNow - entry.At).TotalMilliseconds < CacheTtlMs)
+        {
+            return entry.Value;
+        }
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = new List<SkillEntry>();
@@ -67,8 +87,13 @@ public static class SkillsService
             catch { }
         }
         result.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+        _discoverCache[cacheKey] = (DateTime.UtcNow, result);
         return result;
     }
+
+    /// Drop the cached discovery so the next call rescans disk. Called after
+    /// create/delete so the new state shows up immediately.
+    public static void InvalidateCache() => _discoverCache.Clear();
 
     /// Create a new skill with the given name at the writable user root. The
     /// skill directory is created along with a SKILL.md stub the user can
@@ -89,6 +114,7 @@ public static class SkillsService
             : description.Trim();
         var md = body ?? BuildSkillTemplate(name, desc);
         File.WriteAllText(System.IO.Path.Combine(dir, "SKILL.md"), md);
+        InvalidateCache();
         return dir;
     }
 
@@ -178,6 +204,7 @@ description: {EscapeYamlScalar(description)}
             if (!underKnownRoot) return false;
             if (!Directory.Exists(full)) return false;
             Directory.Delete(full, recursive: true);
+            InvalidateCache();
             return true;
         }
         catch { return false; }

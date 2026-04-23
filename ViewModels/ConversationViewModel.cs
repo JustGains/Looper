@@ -185,6 +185,12 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
 
     public bool IsPiTool => Tool == CliTool.Pi;
 
+    /// Exposes the backing settings for read-only use by adjacent view models
+    /// (e.g. GitViewModel uses this to pick the active tool + model when
+    /// asking the AI for a commit message). Not for mutation — those go
+    /// through the dedicated property setters above.
+    public ConversationSettings SettingsSnapshot => _settings;
+
     // ---- Pi skills (per-conversation toggle set) ----
     public ObservableCollection<SkillPick> Skills { get; } = new();
 
@@ -534,6 +540,7 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     private bool _suppressRecallSync;
 
     private string _chatInput = "";
+    private bool _queuedInjectionRequested;
     public string ChatInput
     {
         get => _chatInput;
@@ -562,7 +569,12 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
             return;
         }
         var t = (_chatInput ?? "").Trim();
-        if (t.Length == 0) return;
+        if (t.Length == 0)
+        {
+            if (IsRunning && QueuedMessages.Count > 0)
+                _ = ForceInjectQueuedAsync();
+            return;
+        }
         QueuedMessages.Add(new QueuedChatMessage(t));
         ChatInput = "";
         OnChanged(nameof(HasQueuedMessages));
@@ -902,10 +914,9 @@ Hard rules for this turn:
         _promptStore.Watch();
         _tasksFile.Watch(TasksFile);
         _tasksText = _tasksFile.Load();
-
-        // Populate skills eagerly so SkillsSummary reads "N skills enabled"
-        // instead of "No skills found" before the user opens the popup.
-        RefreshSkills();
+        // Skills discovery is deferred to first popup open. The in-process
+        // cache in SkillsService makes repeat access cheap, so running it
+        // N times (once per conversation) at project open was pure waste.
     }
 
     /// Called when the plan file changes on disk from outside this VM (e.g.
@@ -942,7 +953,31 @@ Hard rules for this turn:
         return StartRunAsync(chatOnly: false);
     }
 
-    private async Task StartRunAsync(bool chatOnly)
+    /// User hit Send again with an empty chat box while messages are already
+    /// queued and a turn is in flight. Treat that as "send now": kill the
+    /// current iteration, then immediately resume the conversation with the
+    /// queued messages as fresh turns. We force session continuation when we
+    /// already own a captured session id so the queued text lands inside the
+    /// same conversation even if Keep Context is off.
+    private async Task ForceInjectQueuedAsync()
+    {
+        if (_queuedInjectionRequested || !IsRunning || QueuedMessages.Count == 0) return;
+        _queuedInjectionRequested = true;
+        try
+        {
+            _loopRunner.Stop();
+            for (int i = 0; i < 120 && _loopRunner.IsRunning; i++)
+                await Task.Delay(50);
+            if (_loopRunner.IsRunning || QueuedMessages.Count == 0) return;
+            await StartRunAsync(chatOnly: true, forceContinueSession: true);
+        }
+        finally
+        {
+            _queuedInjectionRequested = false;
+        }
+    }
+
+    private async Task StartRunAsync(bool chatOnly, bool forceContinueSession = false)
     {
         _promptStore.FlushPrompt();
         _promptAtLastInjection = null;
@@ -975,7 +1010,8 @@ Hard rules for this turn:
                 _settings, _workingDirectory, tasksRel,
                 initialSessionId: _currentSessionId,
                 chatOnly: chatOnly,
-                enabledSkillPathsProvider: GetEnabledSkillPaths);
+                enabledSkillPathsProvider: GetEnabledSkillPaths,
+                forceContinueSession: forceContinueSession);
         }
         finally
         {
@@ -1072,6 +1108,7 @@ Hard rules for this turn:
     {
         _loopRunner.Stop();
         _promptStore.FlushPrompt();
+        FlushPersistSettings();
         if (_tasksSaveDebounce.IsEnabled)
         {
             _tasksSaveDebounce.Stop();
@@ -1084,7 +1121,32 @@ Hard rules for this turn:
 
     public void Dispose() => Shutdown();
 
-    private void PersistSettings() => _persistSettings();
+    // Debounce settings persistence. A lot of UI interactions (picking a
+    // model, toggling a skill, typing in a field that binds on PropertyChanged)
+    // cascade through settings setters. Writing JSON to disk on every pulse
+    // was a real bottleneck — the debouncer collapses a flurry into one
+    // write ~300 ms after the last change. A flush on Shutdown catches
+    // anything still pending.
+    private DispatcherTimer? _persistDebounce;
+    private void PersistSettings()
+    {
+        if (_persistDebounce == null)
+        {
+            _persistDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+            _persistDebounce.Tick += (_, _) => { _persistDebounce!.Stop(); _persistSettings(); };
+        }
+        _persistDebounce.Stop();
+        _persistDebounce.Start();
+    }
+
+    private void FlushPersistSettings()
+    {
+        if (_persistDebounce?.IsEnabled == true)
+        {
+            _persistDebounce.Stop();
+            _persistSettings();
+        }
+    }
 
     private static string FormatElapsed(DateTime? startUtc)
     {

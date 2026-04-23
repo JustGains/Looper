@@ -34,21 +34,59 @@ public sealed class FileNode : INotifyPropertyChanged
             if (_isExpanded == value) return;
             _isExpanded = value;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsExpanded)));
-            // Folder icon has open/closed variants — re-emit Icon so the
-            // TreeView picks up the swap without us needing a converter.
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Icon)));
+            // Folder icon has open/closed variants — clear the cache + re-trigger
+            // async load so the TreeView swaps to the matching drawing. Only
+            // costs one extra background task per expand/collapse.
+            if (IsDirectory)
+            {
+                _icon = null;
+                _iconLoadStarted = false;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Icon)));
+            }
             if (value && !_loaded && IsDirectory) LoadChildren();
         }
     }
 
     public string Glyph => IsDirectory ? "📁" : "📄";
 
-    /// Material-theme SVG icon for this node. Lazily looked up per node; the
-    /// service caches `DrawingImage`s by name so repeated file extensions
-    /// reuse the same frozen drawing.
-    public ImageSource? Icon => IsDirectory
-        ? FileIconService.GetFolderIcon(Name, open: IsExpanded)
-        : FileIconService.GetFileIcon(Name);
+    // Icon loading is deferred to a background task so parsing material-theme
+    // SVGs doesn't freeze the UI thread when WPF realizes a batch of
+    // TreeViewItems. First binding sees `null` → a task fires on the thread
+    // pool → DrawingImage is produced, frozen, and surfaced via PropertyChanged.
+    // Subsequent accesses return the cached drawing synchronously.
+    private ImageSource? _icon;
+    private bool _iconLoadStarted;
+    public ImageSource? Icon
+    {
+        get
+        {
+            if (_icon != null) return _icon;
+            if (!_iconLoadStarted)
+            {
+                _iconLoadStarted = true;
+                LoadIconAsync();
+            }
+            return null;
+        }
+    }
+
+    private async void LoadIconAsync()
+    {
+        var name = Name;
+        var isDir = IsDirectory;
+        var isExpanded = IsExpanded;
+        var img = await Task.Run(() => isDir
+            ? (ImageSource?)FileIconService.GetFolderIcon(name, open: isExpanded)
+            : FileIconService.GetFileIcon(name));
+        if (img == null) return;
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+        await dispatcher.InvokeAsync(() =>
+        {
+            _icon = img;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Icon)));
+        });
+    }
 
     /// Build the initial stub. For directories we add a placeholder child so
     /// the TreeView shows the expander; real contents load when expanded.
@@ -121,10 +159,26 @@ public sealed class FileExplorerViewModel : INotifyPropertyChanged
     public string WorkingDirectory { get; }
     public ObservableCollection<FileNode> Roots { get; } = new();
 
+    private bool _isActive;
+    private bool _loadedOnce;
+    /// Only walks the tree the first time the Files tab is activated. Flips
+    /// back to false when the tab hides — but we keep the already-loaded
+    /// tree around so re-opening the tab is instant.
+    public bool IsActive
+    {
+        get => _isActive;
+        set
+        {
+            if (_isActive == value) return;
+            _isActive = value;
+            if (value && !_loadedOnce) { _loadedOnce = true; Refresh(); }
+        }
+    }
+
     public FileExplorerViewModel(string workingDirectory)
     {
         WorkingDirectory = workingDirectory;
-        Refresh();
+        // Deferred: no disk walk until IsActive flips on.
     }
 
     /// Force a re-read of the root. Useful after the user has created files
@@ -136,6 +190,7 @@ public sealed class FileExplorerViewModel : INotifyPropertyChanged
         var root = FileNode.CreateRoot(WorkingDirectory);
         root.IsExpanded = true; // eager-expand first level so the tree isn't a single collapsed node
         Roots.Add(root);
+        _loadedOnce = true;
         OnChanged(nameof(Roots));
     }
 

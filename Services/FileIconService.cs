@@ -23,6 +23,24 @@ public static class FileIconService
         TextAsGeometry = true,
     };
 
+    /// Warm the icon pipeline on a background thread at app startup: parse
+    /// the manifest, JIT the SharpVectors types, and load a handful of the
+    /// most common icons so the first file-tree expansion doesn't pay a
+    /// ~100-300 ms class-init tax on the UI thread.
+    public static void Prewarm()
+    {
+        Task.Run(() =>
+        {
+            try
+            {
+                _ = _map.Value;
+                foreach (var seed in new[] { "file", "folder", "folder-open", "json", "typescript", "javascript", "markdown", "csharp" })
+                    LoadByName(seed);
+            }
+            catch { }
+        });
+    }
+
     public static DrawingImage? GetFileIcon(string fileName)
     {
         var map = _map.Value;

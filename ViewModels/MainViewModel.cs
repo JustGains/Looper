@@ -28,7 +28,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set
         {
             if (ReferenceEquals(_selectedProject, value)) return;
+            // Deactivate tab polling on the project we're leaving so its
+            // Git watcher / timer stop immediately — multiple projects would
+            // otherwise all keep ticking in the background.
+            _selectedProject?.SetIsSelected(false);
             _selectedProject = value;
+            value?.SetIsSelected(true);
             Settings.ActiveProject = value?.WorkingDirectory;
             SaveConfig();
             OnChanged();
@@ -213,7 +218,30 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    public void SaveConfig() => _configStore.Save(Settings);
+    // Debounced + coalesced config save. UI tabs/window-state/prefs all
+    // cascade through this path, and the raw JSON write was being done
+    // synchronously on every ripple. 400 ms window is enough to collapse a
+    // burst (project switch, tab toggle, combo box pick) into one write.
+    private System.Windows.Threading.DispatcherTimer? _saveDebounce;
+    public void SaveConfig()
+    {
+        if (_saveDebounce == null)
+        {
+            _saveDebounce = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+            _saveDebounce.Tick += (_, _) => { _saveDebounce!.Stop(); _configStore.Save(Settings); };
+        }
+        _saveDebounce.Stop();
+        _saveDebounce.Start();
+    }
+
+    private void FlushSaveConfig()
+    {
+        if (_saveDebounce?.IsEnabled == true)
+        {
+            _saveDebounce.Stop();
+            _configStore.Save(Settings);
+        }
+    }
 
     public void OpenConfigInNotepad()
     {
@@ -248,7 +276,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         Settings.OpenProjects = Projects.Select(p => p.WorkingDirectory).ToList();
         Settings.ActiveProject = SelectedProject?.WorkingDirectory;
-        SaveConfig();
+        // Flush any pending debounced writes synchronously so we don't exit
+        // before the last edits land on disk.
+        _configStore.Save(Settings);
+        FlushSaveConfig();
         foreach (var p in Projects.ToList()) p.Shutdown();
     }
 

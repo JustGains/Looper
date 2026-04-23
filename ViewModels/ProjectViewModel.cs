@@ -67,6 +67,15 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
     public FileExplorerViewModel FileExplorer =>
         _fileExplorer ??= new FileExplorerViewModel(WorkingDirectory);
 
+    /// Git panel. Lazily built on first access; keeps a FS watcher on .git
+    /// and a periodic poll so the sidebar reflects external changes.
+    private GitViewModel? _git;
+    public GitViewModel Git =>
+        _git ??= new GitViewModel(WorkingDirectory,
+            activeConvSettings: () => SelectedConversation?.SettingsSnapshot);
+
+    public bool IsGitRepo => GitService.IsRepo(WorkingDirectory);
+
     /// Which panel is active in the activity-bar sidebar. `"files"` / `"conversations"` / `"git"`.
     /// Persisted across app sessions via ProjectConfig.LastSidebarTab.
     public string SidebarTab
@@ -82,7 +91,34 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
             OnChanged(nameof(IsFilesTab));
             OnChanged(nameof(IsConversationsTab));
             OnChanged(nameof(IsGitTab));
+            UpdateTabActivations();
         }
+    }
+
+    /// Gate the Git + FileExplorer panels so they only poll / watch / walk
+    /// disk when their tab is the current one AND this project is selected.
+    /// Inactive tabs cost ~nothing — they're just held collections. Call this
+    /// from the MainVM when SelectedProject changes and from SidebarTab's
+    /// setter when the user clicks a different activity-bar icon.
+    public bool IsSelectedProject { get; private set; }
+    public void SetIsSelected(bool selected)
+    {
+        if (IsSelectedProject == selected) return;
+        IsSelectedProject = selected;
+        UpdateTabActivations();
+    }
+
+    private void UpdateTabActivations()
+    {
+        bool wantGit = IsSelectedProject && IsGitTab;
+        bool wantFiles = IsSelectedProject && IsFilesTab;
+        // Only create the VM if we're actually going to use it — the `Git` /
+        // `FileExplorer` getters are lazy. Touching them eagerly would force
+        // the VM to exist even for projects whose tabs never get opened.
+        if (wantGit) Git.IsActive = true;
+        else if (_git != null) _git.IsActive = false;
+        if (wantFiles) FileExplorer.IsActive = true;
+        else if (_fileExplorer != null) _fileExplorer.IsActive = false;
     }
 
     public bool IsFilesTab => SidebarTab == "files";

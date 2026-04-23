@@ -12,9 +12,12 @@ public sealed class ConfigStore
 
     public string Path { get; }
 
+    // Compact JSON: settings get written on every debounced UI change, and
+    // indented output was roughly 2x larger + ~2x slower to serialize. The
+    // file is machine-read only; no one scrubs it in an editor.
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
-        WriteIndented = true,
+        WriteIndented = false,
     };
 
     public ConfigStore()

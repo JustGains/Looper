@@ -15,14 +15,14 @@
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-        <TextBlock Grid.Row="0" Text="Skill name" FontSize="12" FontWeight="SemiBold"
+        <TextBlock Grid.Row="0" x:Name="FieldLabel" Text="Skill name" FontSize="12" FontWeight="SemiBold"
                    Foreground="#eaeaea" Margin="0,0,0,4"/>
         <TextBox x:Name="NameBox" Grid.Row="1"
                  Background="#1b1b1c" BorderBrush="#3f3f46"
                  BorderThickness="1" Padding="6,4"
                  Foreground="#eaeaea" CaretBrush="#eaeaea"
                  FontFamily="Cascadia Code, Cascadia Mono, Consolas"/>
-        <TextBlock Grid.Row="2" TextWrapping="Wrap" FontSize="10"
+        <TextBlock Grid.Row="2" x:Name="HintText" TextWrapping="Wrap" FontSize="10"
                    Foreground="#76767c" Margin="0,6,0,0"
                    Text="Creates ~/.pi/agent/skills/&lt;name&gt;/SKILL.md with a stub. Letters, digits, dashes, underscores only."/>
         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">

@@ -434,7 +434,64 @@
             </Style>
 
             <Style TargetType="CheckBox">
-                <Setter Property="Foreground" Value="{StaticResource FgMuted}"/>
+                <Setter Property="Foreground" Value="{StaticResource FgPrimary}"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="MinHeight" Value="30"/>
+                <Setter Property="VerticalAlignment" Value="Center"/>
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="CheckBox">
+                            <Border x:Name="Root"
+                                    Background="Transparent"
+                                    CornerRadius="5"
+                                    Padding="6,4"
+                                    SnapsToDevicePixels="True">
+                                <DockPanel LastChildFill="True">
+                                    <Border x:Name="Box"
+                                            Width="18" Height="18"
+                                            CornerRadius="4"
+                                            Background="{StaticResource BgInput}"
+                                            BorderBrush="{StaticResource Border1}"
+                                            BorderThickness="1"
+                                            VerticalAlignment="Center">
+                                        <Path x:Name="Tick"
+                                              Data="M 3 9 L 7 13 L 15 5"
+                                              Stroke="White"
+                                              StrokeThickness="2"
+                                              StrokeStartLineCap="Round"
+                                              StrokeEndLineCap="Round"
+                                              StrokeLineJoin="Round"
+                                              Visibility="Collapsed"/>
+                                    </Border>
+                                    <ContentPresenter Margin="8,0,0,0"
+                                                      VerticalAlignment="Center"
+                                                      RecognizesAccessKey="True"
+                                                      TextElement.Foreground="{TemplateBinding Foreground}"/>
+                                </DockPanel>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Root" Property="Background" Value="#26282d"/>
+                                    <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource FgAccent}"/>
+                                </Trigger>
+                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                    <Setter TargetName="Root" Property="Background" Value="#26282d"/>
+                                    <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource FgAccent}"/>
+                                </Trigger>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="Box" Property="Background" Value="{StaticResource Accent}"/>
+                                    <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource FgAccent}"/>
+                                    <Setter TargetName="Tick" Property="Visibility" Value="Visible"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter TargetName="Root" Property="Opacity" Value="0.45"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
             </Style>
 
             <!-- Dark ContextMenu + MenuItem + Separator -->
@@ -711,9 +768,162 @@
                 <Setter Property="CornerRadius" Value="4,4,0,0"/>
             </Style>
 
-            <!-- VS Code-style activity-bar button. Icon centered inside a 42x38
-                 cell; hover lightens the bg; the active tab gets a 2px accent
-                 rail on the left edge and a full-opacity glyph. -->
+            <!-- ===== Git panel styles ===== -->
+            <Style x:Key="GitIconButton" TargetType="Button">
+                <Setter Property="Width" Value="24"/>
+                <Setter Property="Height" Value="22"/>
+                <Setter Property="Margin" Value="2,0"/>
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="Foreground" Value="{StaticResource FgMuted}"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                    CornerRadius="3" SnapsToDevicePixels="True">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Bd" Property="Background" Value="#3a3a3f"/>
+                                    <Setter Property="Foreground" Value="{StaticResource FgPrimary}"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="GitRowActionButton" TargetType="Button" BasedOn="{StaticResource GitIconButton}">
+                <Setter Property="Width" Value="22"/>
+                <Setter Property="Height" Value="20"/>
+                <Setter Property="Margin" Value="2,0,0,0"/>
+                <Setter Property="Opacity" Value="1"/>
+                <Setter Property="Background" Value="#232327"/>
+            </Style>
+
+            <!-- Icon-only action button for the commit bar. Slightly larger
+                 hit target than the header-row icons, matches the Commit /
+                 Amend / Stash row's vertical rhythm. -->
+            <Style x:Key="GitIconActionButton" TargetType="Button" BasedOn="{StaticResource GitIconButton}">
+                <Setter Property="Width" Value="30"/>
+                <Setter Property="Height" Value="28"/>
+                <Setter Property="Margin" Value="0"/>
+            </Style>
+
+            <!-- Shared hover style for Git file rows. Was previously an
+                 inline <Border.Style> inside every DataTemplate instance,
+                 which forced WPF to construct a fresh Style object per row
+                 on every list refresh. Pulling it up here means one Style,
+                 shared across all rows, zero allocations per refresh. -->
+            <Style x:Key="GitFileRowBorder" TargetType="Border">
+                <Setter Property="CornerRadius" Value="3"/>
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="Padding" Value="6,3"/>
+                <Setter Property="Margin" Value="4,0"/>
+                <Setter Property="SnapsToDevicePixels" Value="True"/>
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="Background" Value="#2b2b30"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <Style x:Key="GitBranchChip" TargetType="Button">
+                <Setter Property="Background" Value="{StaticResource BgInput}"/>
+                <Setter Property="BorderBrush" Value="{StaticResource Border1}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                <Setter Property="Padding" Value="10,3"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    Padding="{TemplateBinding Padding}"
+                                    CornerRadius="5">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource FgAccent}"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="GitPrimaryButton" TargetType="Button">
+                <Setter Property="Background" Value="{StaticResource Success}"/>
+                <Setter Property="BorderBrush" Value="#0f5f44"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Foreground" Value="White"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+                <Setter Property="FontSize" Value="12"/>
+                <Setter Property="Padding" Value="12,5"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    Padding="{TemplateBinding Padding}"
+                                    CornerRadius="4">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Bd" Property="Background" Value="{StaticResource SuccessHover}"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter TargetName="Bd" Property="Opacity" Value="0.4"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="GitSecondaryButton" TargetType="Button" BasedOn="{StaticResource GitPrimaryButton}">
+                <Setter Property="Background" Value="#3a3a3d"/>
+                <Setter Property="BorderBrush" Value="{StaticResource Border1}"/>
+                <Setter Property="Foreground" Value="{StaticResource FgPrimary}"/>
+                <Setter Property="FontWeight" Value="Normal"/>
+                <Setter Property="Padding" Value="10,5"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="1" Padding="{TemplateBinding Padding}"
+                                    CornerRadius="4">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Bd" Property="Background" Value="#4a4a4e"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter TargetName="Bd" Property="Opacity" Value="0.4"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- VS Code-style activity-bar button. The "active" state is
+                 driven from code-behind (MainWindow.SetActiveSidebarTab)
+                 which sets Tag="active" on the selected button and clears
+                 it on the others — this avoids MultiDataTriggers that
+                 re-evaluated on every DataContext change. -->
             <Style x:Key="ActivityBarButton" TargetType="Button">
                 <Setter Property="Width" Value="40"/>
                 <Setter Property="Height" Value="40"/>
@@ -721,57 +931,32 @@
                 <Setter Property="Background" Value="Transparent"/>
                 <Setter Property="BorderThickness" Value="0"/>
                 <Setter Property="Foreground" Value="{StaticResource FgMuted}"/>
-                <Setter Property="Opacity" Value="0.65"/>
+                <Setter Property="Opacity" Value="0.6"/>
                 <Setter Property="Cursor" Value="Hand"/>
                 <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="Button">
-                            <Grid>
-                                <Border x:Name="Rail" Width="2" HorizontalAlignment="Left"
-                                        Background="Transparent" Margin="0,4"/>
-                                <Border x:Name="Bd" Background="{TemplateBinding Background}"
-                                        CornerRadius="4" Margin="3,0">
-                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                </Border>
-                            </Grid>
+                            <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                    CornerRadius="4" Margin="2,0">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
                                     <Setter Property="Opacity" Value="1"/>
                                     <Setter TargetName="Bd" Property="Background" Value="#2b2b30"/>
                                 </Trigger>
-                                <!-- Active tab: match button Tag against SelectedProject.SidebarTab
-                                     via a DataTrigger on the templated parent's Tag + DataContext. -->
-                                <DataTrigger Binding="{Binding Path=SidebarTab}" Value="{x:Null}"/>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
                     </Setter.Value>
                 </Setter>
-                <Style.Triggers>
-                    <!-- Match each button's Tag against the active SidebarTab. The
-                         DataContext is ProjectViewModel at this scope. -->
-                    <MultiDataTrigger>
-                        <MultiDataTrigger.Conditions>
-                            <Condition Binding="{Binding RelativeSource={RelativeSource Self}, Path=Tag}" Value="files"/>
-                            <Condition Binding="{Binding SidebarTab}" Value="files"/>
-                        </MultiDataTrigger.Conditions>
-                        <Setter Property="Opacity" Value="1"/>
-                    </MultiDataTrigger>
-                    <MultiDataTrigger>
-                        <MultiDataTrigger.Conditions>
-                            <Condition Binding="{Binding RelativeSource={RelativeSource Self}, Path=Tag}" Value="conversations"/>
-                            <Condition Binding="{Binding SidebarTab}" Value="conversations"/>
-                        </MultiDataTrigger.Conditions>
-                        <Setter Property="Opacity" Value="1"/>
-                    </MultiDataTrigger>
-                    <MultiDataTrigger>
-                        <MultiDataTrigger.Conditions>
-                            <Condition Binding="{Binding RelativeSource={RelativeSource Self}, Path=Tag}" Value="git"/>
-                            <Condition Binding="{Binding SidebarTab}" Value="git"/>
-                        </MultiDataTrigger.Conditions>
-                        <Setter Property="Opacity" Value="1"/>
-                    </MultiDataTrigger>
-                </Style.Triggers>
+            </Style>
+            <!-- Applied by code-behind when a button becomes the active tab;
+                 avoids per-button MultiDataTriggers so the property-change
+                 pulse doesn't ripple across every activity-bar button. -->
+            <Style x:Key="ActivityBarButtonActive" TargetType="Button"
+                   BasedOn="{StaticResource ActivityBarButton}">
+                <Setter Property="Opacity" Value="1"/>
             </Style>
 
             <!-- TabControl / TabItem dark -->
@@ -952,435 +1137,17 @@
     <Grid Margin="10">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>   <!-- tab strip -->
-            <RowDefinition Height="Auto"/>   <!-- toolbar -->
-            <RowDefinition Height="*"/>      <!-- prompt + tasks -->
+            <RowDefinition Height="*"/>      <!-- workspace -->
             <RowDefinition Height="6"/>      <!-- splitter -->
             <RowDefinition Height="260"/>    <!-- console -->
             <RowDefinition Height="Auto"/>   <!-- status bar -->
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="220" MinWidth="160"/>
+            <ColumnDefinition Width="280" MinWidth="220"/>
             <ColumnDefinition Width="4"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <!-- ================= TOOLBAR ================= -->
-        <Border Grid.Row="1" Grid.ColumnSpan="3" Background="{StaticResource BgToolbar}"
-                BorderBrush="{StaticResource Border1}" BorderThickness="1"
-                CornerRadius="6" Padding="10,8" Margin="0,0,0,10"
-                DataContext="{Binding SelectedProject.SelectedConversation}">
-            <DockPanel LastChildFill="True">
-                <!-- Settings icon pinned to the right -->
-                <Button DockPanel.Dock="Right" Style="{StaticResource FlatButton}"
-                        MinWidth="38" Padding="8,5" VerticalAlignment="Top"
-                        Margin="6,0,0,0"
-                        Click="OpenConfig_Click"
-                        ToolTip="Open looper.conf in Notepad">
-                    <TextBlock Text="⚙" FontSize="15" VerticalAlignment="Center"/>
-                </Button>
-
-                <WrapPanel Orientation="Horizontal" ItemHeight="32">
-                <!-- tool -->
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
-                    <Label Content="TOOL"/>
-                    <ComboBox Width="130"
-                              ItemsSource="{Binding ToolOptions}"
-                              SelectedItem="{Binding SelectedToolOption}"
-                              ItemTemplate="{StaticResource ToolOptionTemplate}"/>
-                </StackPanel>
-
-                <!-- model -->
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
-                    <Label Content="MODEL"/>
-                    <!-- Unified searchable picker for Claude / Codex / Pi -->
-                    <Button x:Name="ModelPickerButton"
-                            Width="220" MinHeight="26"
-                            Click="ModelPickerButton_Click"
-                            Background="{StaticResource BgInput}"
-                            Foreground="{StaticResource FgPrimary}"
-                            BorderBrush="{StaticResource Border1}" BorderThickness="1"
-                            Cursor="Hand"
-                            HorizontalContentAlignment="Stretch">
-                        <Button.Template>
-                            <ControlTemplate TargetType="Button">
-                                <Border x:Name="Bd" Background="{TemplateBinding Background}"
-                                        BorderBrush="{TemplateBinding BorderBrush}"
-                                        BorderThickness="{TemplateBinding BorderThickness}"
-                                        CornerRadius="4" Padding="8,3">
-                                    <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
-                                </Border>
-                                <ControlTemplate.Triggers>
-                                    <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource FgAccent}"/>
-                                    </Trigger>
-                                </ControlTemplate.Triggers>
-                            </ControlTemplate>
-                        </Button.Template>
-                        <DockPanel LastChildFill="True">
-                            <TextBlock DockPanel.Dock="Right" Text="▾" Foreground="{StaticResource FgDim}"
-                                       VerticalAlignment="Center" Margin="8,0,0,0"/>
-                            <Grid>
-                                <TextBlock Text="{Binding ModelText}"
-                                           TextTrimming="CharacterEllipsis"
-                                           Foreground="{StaticResource FgPrimary}"
-                                           VerticalAlignment="Center"/>
-                                <TextBlock Text="Select model…"
-                                           Foreground="{StaticResource FgDim}"
-                                           FontStyle="Italic"
-                                           VerticalAlignment="Center"
-                                           IsHitTestVisible="False">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding ModelText}" Value="">
-                                                    <Setter Property="Visibility" Value="Visible"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
-                            </Grid>
-                        </DockPanel>
-                    </Button>
-                    <Popup x:Name="ModelPopup"
-                           PlacementTarget="{Binding ElementName=ModelPickerButton}"
-                           Placement="Bottom"
-                           AllowsTransparency="True" StaysOpen="False"
-                           PopupAnimation="Fade"
-                           DataContext="{Binding DataContext.ModelPicker, RelativeSource={RelativeSource AncestorType=Window}}">
-                        <Border Background="{StaticResource BgSurface}"
-                                BorderBrush="{StaticResource Border1}" BorderThickness="1"
-                                CornerRadius="8" Padding="8" Width="360" MaxHeight="380"
-                                SnapsToDevicePixels="True"
-                                TextElement.Foreground="{StaticResource FgPrimary}">
-                            <DockPanel LastChildFill="True">
-                                <!-- Title row: tool label + total count -->
-                                <DockPanel DockPanel.Dock="Top" Margin="2,0,2,8" LastChildFill="False">
-                                    <TextBlock DockPanel.Dock="Left"
-                                               Text="{Binding ToolLabel, StringFormat='{}{0} models'}"
-                                               Foreground="{StaticResource FgPrimary}"
-                                               FontWeight="SemiBold" FontSize="12"
-                                               VerticalAlignment="Center"/>
-                                    <TextBlock DockPanel.Dock="Right"
-                                               VerticalAlignment="Center" FontSize="10"
-                                               Foreground="{StaticResource FgDim}">
-                                        <Run Text="{Binding TotalCount, Mode=OneWay}"/><Run Text=" total"/>
-                                    </TextBlock>
-                                </DockPanel>
-                                <!-- Search row -->
-                                <Border DockPanel.Dock="Top" Margin="0,0,0,6"
-                                        Background="{StaticResource BgInput}"
-                                        BorderBrush="{StaticResource Border1}" BorderThickness="1"
-                                        CornerRadius="6">
-                                    <Border.Style>
-                                        <Style TargetType="Border">
-                                            <Style.Triggers>
-                                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                                                    <Setter Property="BorderBrush" Value="{StaticResource FgAccent}"/>
-                                                </Trigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Border.Style>
-                                    <Grid>
-                                        <TextBlock Text="🔍" FontSize="11"
-                                                   Foreground="{StaticResource FgDim}"
-                                                   HorizontalAlignment="Left" VerticalAlignment="Center"
-                                                   Margin="10,0,0,0" IsHitTestVisible="False"/>
-                                        <TextBlock Text="Search models…"
-                                                   Foreground="{StaticResource FgDim}"
-                                                   FontStyle="Italic" FontSize="12"
-                                                   HorizontalAlignment="Left" VerticalAlignment="Center"
-                                                   Margin="28,0,0,0" IsHitTestVisible="False">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding Search}" Value="">
-                                                            <Setter Property="Visibility" Value="Visible"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
-                                        <TextBox x:Name="ModelSearchBox"
-                                                 Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}"
-                                                 Background="Transparent" BorderThickness="0"
-                                                 Foreground="{StaticResource FgPrimary}"
-                                                 CaretBrush="{StaticResource FgAccent}"
-                                                 SelectionBrush="{StaticResource FgAccent}"
-                                                 SelectionOpacity="0.35"
-                                                 FontSize="12" Padding="28,6,10,6"
-                                                 VerticalContentAlignment="Center"
-                                                 PreviewKeyDown="ModelSearchBox_PreviewKeyDown"/>
-                                    </Grid>
-                                </Border>
-                                <!-- Footer: refresh (Pi only) + clear -->
-                                <DockPanel DockPanel.Dock="Bottom" Margin="2,6,2,0" LastChildFill="False">
-                                    <Button DockPanel.Dock="Left" Content="Refresh from pi"
-                                            Click="ModelRefresh_Click"
-                                            Background="Transparent" BorderThickness="0"
-                                            Foreground="{StaticResource FgAccent}" Cursor="Hand"
-                                            Padding="0" MinWidth="0" FontSize="11"
-                                            Visibility="{Binding CanRefreshFromCli, Converter={StaticResource BoolToVis}}"/>
-                                    <Button DockPanel.Dock="Right" Content="Clear selection"
-                                            Click="ModelClear_Click"
-                                            Background="Transparent" BorderThickness="0"
-                                            Foreground="{StaticResource FgDim}" Cursor="Hand"
-                                            Padding="0" MinWidth="0" FontSize="11"/>
-                                </DockPanel>
-                                <!-- Model list -->
-                                <ListBox x:Name="ModelList"
-                                         ItemsSource="{Binding Visible}"
-                                         Background="Transparent" BorderThickness="0"
-                                         Foreground="{StaticResource FgPrimary}"
-                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                         MouseDoubleClick="ModelList_MouseDoubleClick"
-                                         KeyDown="ModelList_KeyDown">
-                                    <ListBox.ItemContainerStyle>
-                                        <Style TargetType="ListBoxItem">
-                                            <Setter Property="Padding" Value="0"/>
-                                            <Setter Property="Foreground" Value="{StaticResource FgPrimary}"/>
-                                            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-                                            <Setter Property="Template">
-                                                <Setter.Value>
-                                                    <ControlTemplate TargetType="ListBoxItem">
-                                                        <Border x:Name="Bd" Background="Transparent"
-                                                                CornerRadius="4" Padding="6,5">
-                                                            <ContentPresenter/>
-                                                        </Border>
-                                                        <ControlTemplate.Triggers>
-                                                            <Trigger Property="IsMouseOver" Value="True">
-                                                                <Setter TargetName="Bd" Property="Background" Value="#2b2b30"/>
-                                                            </Trigger>
-                                                            <Trigger Property="IsSelected" Value="True">
-                                                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource Accent}"/>
-                                                                <Setter Property="Foreground" Value="White"/>
-                                                            </Trigger>
-                                                        </ControlTemplate.Triggers>
-                                                    </ControlTemplate>
-                                                </Setter.Value>
-                                            </Setter>
-                                        </Style>
-                                    </ListBox.ItemContainerStyle>
-                                    <ListBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <DockPanel LastChildFill="True">
-                                                <Button DockPanel.Dock="Left"
-                                                        Content="{Binding FavoriteGlyph}"
-                                                        Click="ModelFavoriteToggle_Click"
-                                                        Tag="{Binding}"
-                                                        Background="Transparent" BorderThickness="0"
-                                                        FontSize="14" MinWidth="0" Padding="2,0,8,0"
-                                                        Cursor="Hand" ToolTip="Toggle favorite">
-                                                    <Button.Style>
-                                                        <Style TargetType="Button">
-                                                            <Setter Property="Foreground" Value="{StaticResource FgDim}"/>
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsFavorite}" Value="True">
-                                                                    <Setter Property="Foreground" Value="#ffd200"/>
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Button.Style>
-                                                </Button>
-                                                <TextBlock Text="{Binding Name}"
-                                                           Foreground="{StaticResource FgPrimary}"
-                                                           FontFamily="Cascadia Code, Cascadia Mono, Consolas"
-                                                           FontSize="12"
-                                                           VerticalAlignment="Center"
-                                                           TextTrimming="CharacterEllipsis"/>
-                                            </DockPanel>
-                                        </DataTemplate>
-                                    </ListBox.ItemTemplate>
-                                </ListBox>
-                            </DockPanel>
-                        </Border>
-                    </Popup>
-                </StackPanel>
-
-                <!-- effort -->
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
-                    <Label Content="EFFORT"/>
-                    <ComboBox Width="110" Style="{StaticResource EditableComboBox}"
-                              ItemsSource="{Binding EffortSuggestions}"
-                              Text="{Binding EffortText, UpdateSourceTrigger=LostFocus}"
-                              ToolTip="low / medium / high / xhigh / max. Blank = CLI default."/>
-                </StackPanel>
-
-                <!-- Pi-only: Skills menu (toggle / add / delete on-disk SKILL.md packages) -->
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0"
-                            Visibility="{Binding IsPiTool, Converter={StaticResource BoolToVis}}">
-                    <Label Content="SKILLS"/>
-                    <Button x:Name="SkillsButton"
-                            MinWidth="150" MinHeight="26"
-                            Click="SkillsButton_Click"
-                            Background="{StaticResource BgInput}"
-                            Foreground="{StaticResource FgPrimary}"
-                            BorderBrush="{StaticResource Border1}" BorderThickness="1"
-                            Cursor="Hand"
-                            HorizontalContentAlignment="Stretch"
-                            ToolTip="Manage Pi skills — toggle on/off, add, delete. Only enabled skills load.">
-                        <Button.Template>
-                            <ControlTemplate TargetType="Button">
-                                <Border x:Name="Bd" Background="{TemplateBinding Background}"
-                                        BorderBrush="{TemplateBinding BorderBrush}"
-                                        BorderThickness="{TemplateBinding BorderThickness}"
-                                        CornerRadius="4" Padding="8,3">
-                                    <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
-                                </Border>
-                                <ControlTemplate.Triggers>
-                                    <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource FgAccent}"/>
-                                    </Trigger>
-                                </ControlTemplate.Triggers>
-                            </ControlTemplate>
-                        </Button.Template>
-                        <DockPanel LastChildFill="True">
-                            <TextBlock DockPanel.Dock="Right" Text="▾" Foreground="{StaticResource FgDim}"
-                                       VerticalAlignment="Center" Margin="8,0,0,0"/>
-                            <TextBlock Text="{Binding SkillsSummary}"
-                                       TextTrimming="CharacterEllipsis"
-                                       VerticalAlignment="Center"/>
-                        </DockPanel>
-                    </Button>
-                    <Popup x:Name="SkillsPopup"
-                           PlacementTarget="{Binding ElementName=SkillsButton}"
-                           Placement="Bottom"
-                           AllowsTransparency="True" StaysOpen="False"
-                           PopupAnimation="Fade">
-                        <Border Background="{StaticResource BgSurface}"
-                                BorderBrush="{StaticResource Border1}" BorderThickness="1"
-                                CornerRadius="8" Padding="8" Width="380" MaxHeight="420"
-                                SnapsToDevicePixels="True">
-                            <DockPanel LastChildFill="True">
-                                <!-- Header -->
-                                <DockPanel DockPanel.Dock="Top" Margin="2,0,2,6" LastChildFill="False">
-                                    <TextBlock DockPanel.Dock="Left" Text="Pi skills"
-                                               FontWeight="SemiBold" FontSize="12"
-                                               VerticalAlignment="Center"
-                                               Foreground="{StaticResource FgPrimary}"/>
-                                    <Button DockPanel.Dock="Right" Content="+ New"
-                                            Click="SkillsAdd_Click"
-                                            Background="Transparent" BorderThickness="0"
-                                            Foreground="{StaticResource FgAccent}" Cursor="Hand"
-                                            Padding="4,0" MinWidth="0" FontSize="11"/>
-                                </DockPanel>
-                                <!-- Footer: refresh -->
-                                <DockPanel DockPanel.Dock="Bottom" Margin="2,6,2,0" LastChildFill="False">
-                                    <Button DockPanel.Dock="Left" Content="Refresh"
-                                            Click="SkillsRefresh_Click"
-                                            Background="Transparent" BorderThickness="0"
-                                            Foreground="{StaticResource FgAccent}" Cursor="Hand"
-                                            Padding="0" MinWidth="0" FontSize="11"/>
-                                    <TextBlock DockPanel.Dock="Right"
-                                               VerticalAlignment="Center" FontSize="10"
-                                               Foreground="{StaticResource FgDim}"
-                                               Text="{Binding SkillsSummary}"/>
-                                </DockPanel>
-                                <!-- Skills list -->
-                                <ListBox ItemsSource="{Binding Skills}"
-                                         Background="Transparent" BorderThickness="0"
-                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                         ScrollViewer.VerticalScrollBarVisibility="Auto">
-                                    <ListBox.ItemContainerStyle>
-                                        <Style TargetType="ListBoxItem">
-                                            <Setter Property="Padding" Value="0"/>
-                                            <Setter Property="Margin" Value="0,1"/>
-                                            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-                                            <Setter Property="Template">
-                                                <Setter.Value>
-                                                    <ControlTemplate TargetType="ListBoxItem">
-                                                        <Border x:Name="Bd" Background="Transparent"
-                                                                CornerRadius="4" Padding="4,4">
-                                                            <ContentPresenter/>
-                                                        </Border>
-                                                        <ControlTemplate.Triggers>
-                                                            <Trigger Property="IsMouseOver" Value="True">
-                                                                <Setter TargetName="Bd" Property="Background" Value="#2b2b30"/>
-                                                            </Trigger>
-                                                        </ControlTemplate.Triggers>
-                                                    </ControlTemplate>
-                                                </Setter.Value>
-                                            </Setter>
-                                        </Style>
-                                    </ListBox.ItemContainerStyle>
-                                    <ListBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <DockPanel LastChildFill="True">
-                                                <CheckBox DockPanel.Dock="Left"
-                                                          IsChecked="{Binding IsEnabled, Mode=TwoWay}"
-                                                          VerticalAlignment="Center"
-                                                          Margin="4,0,10,0"/>
-                                                <Button DockPanel.Dock="Right"
-                                                        Content="🗑"
-                                                        Click="SkillsDelete_Click"
-                                                        Tag="{Binding}"
-                                                        Background="Transparent" BorderThickness="0"
-                                                        Foreground="{StaticResource FgDim}"
-                                                        Cursor="Hand"
-                                                        Padding="6,0" MinWidth="0" FontSize="13"
-                                                        ToolTip="Delete this skill (removes the SKILL.md directory)"/>
-                                                <StackPanel>
-                                                    <TextBlock Text="{Binding Name}"
-                                                               FontFamily="Cascadia Code, Cascadia Mono, Consolas"
-                                                               FontSize="12"
-                                                               Foreground="{StaticResource FgPrimary}"/>
-                                                    <TextBlock Text="{Binding Description}"
-                                                               FontSize="10" FontStyle="Italic"
-                                                               Foreground="{StaticResource FgDim}"
-                                                               TextTrimming="CharacterEllipsis"/>
-                                                    <TextBlock Text="{Binding Origin}"
-                                                               FontSize="9"
-                                                               Foreground="{StaticResource FgDim}"/>
-                                                </StackPanel>
-                                            </DockPanel>
-                                        </DataTemplate>
-                                    </ListBox.ItemTemplate>
-                                </ListBox>
-                            </DockPanel>
-                        </Border>
-                    </Popup>
-                </StackPanel>
-
-                <Border Style="{StaticResource ToolbarDivider}"/>
-
-                <!-- numerics (timeout moved to console header) -->
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
-                    <CheckBox Content="Ralph" Margin="0,0,10,0"
-                              VerticalAlignment="Center"
-                              IsChecked="{Binding RalphEnabled}"
-                              ToolTip="When off, each Start does exactly one pass (no looping). Max Iter is ignored."/>
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
-                                Visibility="{Binding RalphEnabled, Converter={StaticResource BoolToVis}}">
-                        <Label Content="MAX ITER"/>
-                        <Border BorderBrush="{StaticResource Border1}" BorderThickness="1"
-                                CornerRadius="4" Background="{StaticResource BgInput}"
-                                Height="26">
-                            <StackPanel Orientation="Horizontal">
-                                <RepeatButton Style="{StaticResource StepperButton}"
-                                              Click="MaxIterDown_Click" Content="−"/>
-                                <TextBox x:Name="MaxIterBox" Width="36"
-                                         Background="Transparent" BorderThickness="0"
-                                         Text="{Binding MaxIterations, UpdateSourceTrigger=LostFocus}"
-                                         VerticalContentAlignment="Center"
-                                         HorizontalContentAlignment="Center"/>
-                                <RepeatButton Style="{StaticResource StepperButton}"
-                                              Click="MaxIterUp_Click" Content="+"/>
-                            </StackPanel>
-                        </Border>
-                    </StackPanel>
-                </StackPanel>
-
-                <CheckBox Margin="4,0,8,0" VerticalAlignment="Center"
-                          IsChecked="{Binding KeepContext}"
-                          Content="Keep context"
-                          ToolTip="Subsequent iterations resume the previous CLI session (Claude: --resume / Codex: exec resume). Both tools auto-compact when context grows large."/>
-
-                </WrapPanel>
-            </DockPanel>
-        </Border>
 
         <!-- ================= PROJECT TAB STRIP ================= -->
         <Border Grid.Row="0" Grid.ColumnSpan="3" BorderBrush="{StaticResource Border1}"
@@ -1523,7 +1290,8 @@
         </Border>
 
         <!-- ================= LEFT SIDEBAR (VS Code-style activity bar + panel) ================= -->
-        <Grid Grid.Row="2" Grid.Column="0" Grid.RowSpan="3"
+        <Grid Grid.Row="1" Grid.Column="0" Grid.RowSpan="3"
+              x:Name="SidebarRoot"
               DataContext="{Binding SelectedProject}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="42"/>  <!-- activity bar -->
@@ -1535,19 +1303,22 @@
                     BorderBrush="{StaticResource Border2}" BorderThickness="1,1,0,1"
                     CornerRadius="4,0,0,4">
                 <StackPanel Orientation="Vertical" Margin="0,6">
-                    <Button Style="{StaticResource ActivityBarButton}"
+                    <Button x:Name="TabFilesButton"
+                            Style="{StaticResource ActivityBarButton}"
                             Tag="files" Click="SidebarTab_Click"
                             ToolTip="Files">
                         <TextBlock Text="📁" FontSize="18"/>
                     </Button>
-                    <Button Style="{StaticResource ActivityBarButton}"
+                    <Button x:Name="TabConversationsButton"
+                            Style="{StaticResource ActivityBarButton}"
                             Tag="conversations" Click="SidebarTab_Click"
                             ToolTip="Conversations">
                         <TextBlock Text="💬" FontSize="16"/>
                     </Button>
-                    <Button Style="{StaticResource ActivityBarButton}"
+                    <Button x:Name="TabGitButton"
+                            Style="{StaticResource ActivityBarButton}"
                             Tag="git" Click="SidebarTab_Click"
-                            ToolTip="Git (coming soon)">
+                            ToolTip="Git">
                         <TextBlock Text="🔀" FontSize="16"/>
                     </Button>
                 </StackPanel>
@@ -1596,12 +1367,18 @@
                                   Background="Transparent" BorderThickness="0"
                                   ScrollViewer.HorizontalScrollBarVisibility="Auto"
                                   ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                  ScrollViewer.CanContentScroll="True"
                                   VirtualizingStackPanel.IsVirtualizing="True"
                                   VirtualizingStackPanel.VirtualizationMode="Recycling"
+                                  PreviewMouseRightButtonDown="FileTree_PreviewMouseRightButtonDown"
                                   Foreground="{StaticResource FgPrimary}">
-                            <TreeView.Resources>
-                                <ContextMenu x:Key="FileNodeMenu" x:Shared="False"
-                                             Background="{StaticResource BgSurface}"
+                            <!-- One shared ContextMenu for the whole tree. Previously
+                                 every realized TreeViewItem got its own via
+                                 x:Shared="False", which was a real perf cost on
+                                 large trees. The click handlers look the target
+                                 up from ContextMenu.PlacementTarget. -->
+                            <TreeView.ContextMenu>
+                                <ContextMenu Background="{StaticResource BgSurface}"
                                              BorderBrush="{StaticResource Border1}"
                                              Foreground="{StaticResource FgPrimary}">
                                     <MenuItem Header="Open" Click="FileNodeOpen_Click"/>
@@ -1610,13 +1387,12 @@
                                     <MenuItem Header="Copy path" Click="FileNodeCopyPath_Click"/>
                                     <MenuItem Header="Copy relative path" Click="FileNodeCopyRelPath_Click"/>
                                 </ContextMenu>
-                            </TreeView.Resources>
+                            </TreeView.ContextMenu>
                             <TreeView.ItemContainerStyle>
                                 <Style TargetType="TreeViewItem">
                                     <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
                                     <Setter Property="Padding" Value="2,1"/>
                                     <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-                                    <Setter Property="ContextMenu" Value="{StaticResource FileNodeMenu}"/>
                                 </Style>
                             </TreeView.ItemContainerStyle>
                             <TreeView.ItemTemplate>
@@ -1786,48 +1562,881 @@
                 </ListBox>
                     </DockPanel>
 
-                    <!-- ===== GIT PANEL (placeholder) ===== -->
-                    <DockPanel Visibility="{Binding IsGitTab, Converter={StaticResource BoolToVis}}">
+                    <!-- ===== GIT PANEL =====
+                         Visibility is bound via ElementName because this
+                         DockPanel overrides its own DataContext to
+                         `{Binding Git}` for the rest of the subtree. Without
+                         the explicit ElementName source, WPF would look up
+                         `IsGitTab` on GitViewModel (where it doesn't exist),
+                         the binding would silently fail, and Visibility
+                         would default to Visible — causing the Git panel
+                         to overlap whichever tab was actually selected. -->
+                    <DockPanel Visibility="{Binding DataContext.IsGitTab,
+                                              ElementName=SidebarRoot,
+                                              Converter={StaticResource BoolToVis}}"
+                               DataContext="{Binding Git}">
+                        <!-- Header: SOURCE CONTROL + action buttons -->
                         <Border DockPanel.Dock="Top" Background="{StaticResource BgToolbar}"
                                 BorderBrush="{StaticResource Border2}" BorderThickness="0,0,0,1"
                                 Padding="10,6">
-                            <TextBlock Style="{StaticResource PaneHeader}" Text="GIT"/>
+                            <DockPanel LastChildFill="False">
+                                <TextBlock Style="{StaticResource PaneHeader}" Text="SOURCE CONTROL"/>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                    <Button Click="GitRefresh_Click" ToolTip="Refresh status"
+                                            Style="{StaticResource GitIconButton}">
+                                        <TextBlock Text="⟳" FontSize="13"/>
+                                    </Button>
+                                    <Button Click="GitFetch_Click" ToolTip="Fetch from remote"
+                                            Style="{StaticResource GitIconButton}">
+                                        <TextBlock Text="↙" FontSize="13"/>
+                                    </Button>
+                                    <Button Click="GitPull_Click" ToolTip="Pull (fast-forward only)"
+                                            Style="{StaticResource GitIconButton}">
+                                        <TextBlock Text="⬇" FontSize="13"/>
+                                    </Button>
+                                    <Button Click="GitPush_Click" ToolTip="Push to upstream"
+                                            Style="{StaticResource GitIconButton}">
+                                        <TextBlock Text="⬆" FontSize="13"/>
+                                    </Button>
+                                </StackPanel>
+                            </DockPanel>
                         </Border>
-                        <Grid>
-                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
-                                        Margin="20">
-                                <TextBlock Text="🔀" FontSize="28" HorizontalAlignment="Center"
-                                           Foreground="{StaticResource FgDim}"/>
-                                <TextBlock Text="Coming soon"
-                                           Foreground="{StaticResource FgDim}"
-                                           FontSize="13" FontWeight="SemiBold"
-                                           HorizontalAlignment="Center" Margin="0,8,0,4"/>
-                                <TextBlock Text="Git status, diff, and commit will live here."
-                                           Foreground="{StaticResource FgDim}"
+
+                        <!-- Error bar (only shows when something went wrong) -->
+                        <Border DockPanel.Dock="Top"
+                                Background="#3b2428"
+                                BorderBrush="#5c2a30" BorderThickness="0,0,0,1"
+                                Padding="10,4"
+                                Visibility="{Binding HasError, Converter={StaticResource BoolToVis}}">
+                            <DockPanel LastChildFill="True">
+                                <Button DockPanel.Dock="Right" Content="✕" MinWidth="0"
+                                        Background="Transparent" BorderThickness="0"
+                                        Foreground="{StaticResource FgDim}" Cursor="Hand"
+                                        Padding="6,0" FontSize="10"
+                                        Click="GitDismissError_Click"/>
+                                <TextBlock Text="{Binding LastError}"
+                                           Foreground="#ffb4b4"
                                            FontSize="11"
                                            TextWrapping="Wrap"
-                                           TextAlignment="Center"
-                                           MaxWidth="180"/>
+                                           VerticalAlignment="Center"/>
+                            </DockPanel>
+                        </Border>
+
+                        <!-- Branch bar -->
+                        <Border DockPanel.Dock="Top"
+                                Background="{StaticResource BgSurface}"
+                                BorderBrush="{StaticResource Border2}" BorderThickness="0,0,0,1"
+                                Padding="10,6">
+                            <DockPanel LastChildFill="False">
+                                <Button DockPanel.Dock="Left"
+                                        x:Name="GitBranchButton"
+                                        Click="GitBranch_Click"
+                                        Style="{StaticResource GitBranchChip}">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="⎇" FontSize="12"
+                                                   Foreground="{StaticResource FgAccent}"
+                                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                        <TextBlock Text="{Binding BranchLabel}"
+                                                   FontFamily="Cascadia Code, Cascadia Mono, Consolas"
+                                                   FontSize="12"
+                                                   Foreground="{StaticResource FgPrimary}"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock Text="▾" FontSize="9"
+                                                   Foreground="{StaticResource FgDim}"
+                                                   VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                    </StackPanel>
+                                </Button>
+                                <TextBlock DockPanel.Dock="Right"
+                                           Text="{Binding SyncLabel}"
+                                           FontFamily="Cascadia Code, Cascadia Mono, Consolas"
+                                           FontSize="11"
+                                           Foreground="{StaticResource FgDim}"
+                                           VerticalAlignment="Center"
+                                           Margin="8,0,0,0"/>
+                            </DockPanel>
+                        </Border>
+
+                        <!-- Branch picker popup -->
+                        <Popup x:Name="GitBranchPopup"
+                               PlacementTarget="{Binding ElementName=GitBranchButton}"
+                               Placement="Bottom" StaysOpen="False"
+                               AllowsTransparency="True" PopupAnimation="Fade">
+                            <Border Background="{StaticResource BgToolbar}"
+                                    BorderBrush="{StaticResource Border1}" BorderThickness="1"
+                                    CornerRadius="8" Padding="8" Width="280" MaxHeight="340"
+                                    SnapsToDevicePixels="True"
+                                    TextElement.Foreground="{StaticResource FgPrimary}">
+                                <DockPanel LastChildFill="True">
+                                    <DockPanel DockPanel.Dock="Top" Margin="2,0,2,8" LastChildFill="True">
+                                        <TextBlock DockPanel.Dock="Left" Text="Branches"
+                                                   FontWeight="SemiBold" FontSize="11"
+                                                   Foreground="{StaticResource FgMuted}"
+                                                   VerticalAlignment="Center"/>
+                                        <Button DockPanel.Dock="Right" Content="+ New branch…"
+                                                Click="GitCreateBranch_Click"
+                                                Background="Transparent" BorderThickness="0"
+                                                Foreground="{StaticResource FgAccent}" Cursor="Hand"
+                                                FontSize="11" Padding="6,2" MinWidth="0"
+                                                HorizontalAlignment="Right"/>
+                                    </DockPanel>
+                                    <ListBox x:Name="GitBranchList"
+                                             ItemsSource="{Binding Branches}"
+                                             Background="Transparent" BorderThickness="0"
+                                             Foreground="{StaticResource FgPrimary}"
+                                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                             MouseDoubleClick="GitBranchList_MouseDoubleClick">
+                                        <ListBox.ItemContainerStyle>
+                                            <Style TargetType="ListBoxItem">
+                                                <Setter Property="Padding" Value="8,6"/>
+                                                <Setter Property="Margin" Value="0,1"/>
+                                                <Setter Property="Cursor" Value="Hand"/>
+                                                <Setter Property="Foreground" Value="{StaticResource FgPrimary}"/>
+                                                <Setter Property="Background" Value="Transparent"/>
+                                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                                                <Setter Property="Template">
+                                                    <Setter.Value>
+                                                        <ControlTemplate TargetType="ListBoxItem">
+                                                            <Border x:Name="Bd"
+                                                                    Background="{TemplateBinding Background}"
+                                                                    BorderBrush="Transparent"
+                                                                    BorderThickness="1"
+                                                                    CornerRadius="5"
+                                                                    Padding="{TemplateBinding Padding}">
+                                                                <ContentPresenter HorizontalAlignment="Stretch"
+                                                                                  VerticalAlignment="Center"/>
+                                                            </Border>
+                                                            <ControlTemplate.Triggers>
+                                                                <Trigger Property="IsMouseOver" Value="True">
+                                                                    <Setter TargetName="Bd" Property="Background" Value="#2f3136"/>
+                                                                    <Setter TargetName="Bd" Property="BorderBrush" Value="#3a3d44"/>
+                                                                </Trigger>
+                                                                <Trigger Property="IsSelected" Value="True">
+                                                                    <Setter TargetName="Bd" Property="Background" Value="{StaticResource Accent}"/>
+                                                                    <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource FgAccent}"/>
+                                                                    <Setter Property="Foreground" Value="White"/>
+                                                                </Trigger>
+                                                            </ControlTemplate.Triggers>
+                                                        </ControlTemplate>
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </Style>
+                                        </ListBox.ItemContainerStyle>
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <DockPanel LastChildFill="True">
+                                                    <TextBlock Text="{Binding}"
+                                                               FontFamily="Cascadia Code, Cascadia Mono, Consolas"
+                                                               FontSize="12"
+                                                               VerticalAlignment="Center"
+                                                               TextTrimming="CharacterEllipsis"/>
+                                                </DockPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </DockPanel>
+                            </Border>
+                        </Popup>
+
+                        <!-- Commit message + actions -->
+                        <Border DockPanel.Dock="Top"
+                                Background="{StaticResource BgSurface}"
+                                BorderBrush="{StaticResource Border2}" BorderThickness="0,0,0,1"
+                                Padding="10,8">
+                            <StackPanel>
+                                <Grid>
+                                    <TextBox x:Name="GitCommitBox"
+                                             Text="{Binding CommitMessage, UpdateSourceTrigger=PropertyChanged}"
+                                             Background="{StaticResource BgInput}"
+                                             BorderBrush="{StaticResource Border1}" BorderThickness="1"
+                                             Foreground="{StaticResource FgPrimary}"
+                                             CaretBrush="{StaticResource FgPrimary}"
+                                             SelectionBrush="{StaticResource Accent}"
+                                             FontSize="12"
+                                             Padding="8,6"
+                                             MinHeight="52" MaxHeight="120"
+                                             AcceptsReturn="True"
+                                             TextWrapping="Wrap"
+                                             VerticalScrollBarVisibility="Auto"
+                                             PreviewKeyDown="GitCommitBox_PreviewKeyDown"/>
+                                    <TextBlock Text="Message (Ctrl+Enter to commit)"
+                                               Foreground="{StaticResource FgDim}"
+                                               FontStyle="Italic" FontSize="11"
+                                               Margin="10,8,0,0"
+                                               IsHitTestVisible="False"
+                                               VerticalAlignment="Top" HorizontalAlignment="Left">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding CommitMessage}" Value="">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Grid>
+                                <!-- Primary actions stay visible; secondary
+                                     actions live under an overflow menu so the
+                                     narrow Git sidebar stays clean. -->
+                                <WrapPanel Margin="0,6,0,0"
+                                           HorizontalAlignment="Right"
+                                           Orientation="Horizontal">
+                                    <Button Click="GitCommit_Click"
+                                            Style="{StaticResource GitPrimaryButton}"
+                                            IsEnabled="{Binding CanCommit}"
+                                            Margin="0,0,4,4"
+                                            ToolTip="Commit staged changes">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="✓" FontSize="12" Margin="0,0,5,0"/>
+                                            <TextBlock Text="Commit"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Click="GitAiMessage_Click"
+                                            Style="{StaticResource GitIconActionButton}"
+                                            Margin="0,0,4,4"
+                                            ToolTip="Generate a commit message with AI (uses current conversation's tool)">
+                                        <TextBlock FontSize="13" VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Text" Value="✨"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsGeneratingMessage}" Value="True">
+                                                            <Setter Property="Text" Value="⏳"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Button>
+                                    <Button Click="GitMoreActions_Click"
+                                            Style="{StaticResource GitIconActionButton}"
+                                            Margin="0,0,0,4"
+                                            ToolTip="More Git actions">
+                                        <Button.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="Stash changes"
+                                                          Click="GitStash_Click"/>
+                                                <MenuItem Header="Amend previous commit"
+                                                          Click="GitAmend_Click"/>
+                                            </ContextMenu>
+                                        </Button.ContextMenu>
+                                        <TextBlock Text="⋯" FontSize="18" VerticalAlignment="Center"/>
+                                    </Button>
+                                </WrapPanel>
                             </StackPanel>
-                        </Grid>
+                        </Border>
+
+                        <!-- Changes list (scrollable main body) -->
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      Background="Transparent">
+                            <StackPanel Margin="0,4,0,8">
+                                <!-- STAGED -->
+                                <DockPanel Margin="8,4,8,2" LastChildFill="False">
+                                    <TextBlock DockPanel.Dock="Left"
+                                               Text="STAGED CHANGES"
+                                               FontSize="10" FontWeight="SemiBold"
+                                               Foreground="{StaticResource FgDim}"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock DockPanel.Dock="Left"
+                                               Text="{Binding StagedChanges.Count, StringFormat=({0})}"
+                                               FontSize="10"
+                                               Foreground="{StaticResource FgDim}"
+                                               VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                    <Button DockPanel.Dock="Right"
+                                            Click="GitUnstageAll_Click"
+                                            Style="{StaticResource GitIconButton}"
+                                            ToolTip="Unstage all">
+                                        <TextBlock Text="−" FontSize="12" FontWeight="Bold"/>
+                                    </Button>
+                                </DockPanel>
+                                <ItemsControl ItemsSource="{Binding StagedChanges}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Style="{StaticResource GitFileRowBorder}"
+                                                    MouseLeftButtonUp="GitStagedRow_MouseDown"
+                                                    ToolTip="{Binding FullPath}">
+                                                <DockPanel LastChildFill="True">
+                                                    <Button DockPanel.Dock="Right"
+                                                            Click="GitUnstage_Click" Tag="{Binding}"
+                                                            Style="{StaticResource GitRowActionButton}"
+                                                            ToolTip="Unstage">
+                                                        <TextBlock Text="−" FontSize="12" FontWeight="Bold"/>
+                                                    </Button>
+                                                    <TextBlock DockPanel.Dock="Right"
+                                                               Text="{Binding StatusLetter}"
+                                                               Foreground="{Binding StatusBrush}"
+                                                               FontFamily="Cascadia Code, Cascadia Mono, Consolas"
+                                                               FontSize="11" FontWeight="SemiBold"
+                                                               Width="14" TextAlignment="Center"
+                                                               VerticalAlignment="Center"
+                                                               Margin="4,0,6,0"/>
+                                                    <Border DockPanel.Dock="Left"
+                                                            Width="18" Height="18"
+                                                            Margin="0,0,6,0"
+                                                            Background="#202228"
+                                                            BorderBrush="#31343a"
+                                                            BorderThickness="1"
+                                                            CornerRadius="4"
+                                                            VerticalAlignment="Center">
+                                                        <Image Source="{Binding Icon}"
+                                                               Width="16" Height="16"
+                                                               VerticalAlignment="Center"
+                                                               HorizontalAlignment="Center"
+                                                               RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                    </Border>
+                                                    <TextBlock Text="{Binding FileName}"
+                                                               Foreground="{StaticResource FgPrimary}"
+                                                               FontSize="12"
+                                                               VerticalAlignment="Center"
+                                                               TextTrimming="CharacterEllipsis"/>
+                                                </DockPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <!-- CHANGES (unstaged) -->
+                                <DockPanel Margin="8,10,8,2" LastChildFill="False">
+                                    <TextBlock DockPanel.Dock="Left"
+                                               Text="CHANGES"
+                                               FontSize="10" FontWeight="SemiBold"
+                                               Foreground="{StaticResource FgDim}"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock DockPanel.Dock="Left"
+                                               Text="{Binding UnstagedChanges.Count, StringFormat=({0})}"
+                                               FontSize="10"
+                                               Foreground="{StaticResource FgDim}"
+                                               VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                    <Button DockPanel.Dock="Right"
+                                            Click="GitStageAll_Click"
+                                            Style="{StaticResource GitIconButton}"
+                                            ToolTip="Stage all">
+                                        <TextBlock Text="+" FontSize="12" FontWeight="Bold"/>
+                                    </Button>
+                                </DockPanel>
+                                <ItemsControl ItemsSource="{Binding UnstagedChanges}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Style="{StaticResource GitFileRowBorder}"
+                                                    MouseLeftButtonUp="GitUnstagedRow_MouseDown"
+                                                    ToolTip="{Binding FullPath}">
+                                                <DockPanel LastChildFill="True">
+                                                    <Button DockPanel.Dock="Right"
+                                                            Click="GitStage_Click" Tag="{Binding}"
+                                                            Style="{StaticResource GitRowActionButton}"
+                                                            ToolTip="Stage">
+                                                        <TextBlock Text="+" FontSize="12" FontWeight="Bold"/>
+                                                    </Button>
+                                                    <Button DockPanel.Dock="Right"
+                                                            Click="GitDiscard_Click" Tag="{Binding}"
+                                                            Style="{StaticResource GitRowActionButton}"
+                                                            ToolTip="Discard changes">
+                                                        <TextBlock Text="⟲" FontSize="11"/>
+                                                    </Button>
+                                                    <TextBlock DockPanel.Dock="Right"
+                                                               Text="{Binding StatusLetter}"
+                                                               Foreground="{Binding StatusBrush}"
+                                                               FontFamily="Cascadia Code, Cascadia Mono, Consolas"
+                                                               FontSize="11" FontWeight="SemiBold"
+                                                               Width="14" TextAlignment="Center"
+                                                               VerticalAlignment="Center"
+                                                               Margin="4,0,6,0"/>
+                                                    <Border DockPanel.Dock="Left"
+                                                            Width="18" Height="18"
+                                                            Margin="0,0,6,0"
+                                                            Background="#202228"
+                                                            BorderBrush="#31343a"
+                                                            BorderThickness="1"
+                                                            CornerRadius="4"
+                                                            VerticalAlignment="Center">
+                                                        <Image Source="{Binding Icon}"
+                                                               Width="16" Height="16"
+                                                               VerticalAlignment="Center"
+                                                               HorizontalAlignment="Center"
+                                                               RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                    </Border>
+                                                    <TextBlock Text="{Binding FileName}"
+                                                               Foreground="{StaticResource FgPrimary}"
+                                                               FontSize="12"
+                                                               VerticalAlignment="Center"
+                                                               TextTrimming="CharacterEllipsis"/>
+                                                </DockPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <!-- RECENT COMMITS -->
+                                <TextBlock Text="RECENT COMMITS"
+                                           FontSize="10" FontWeight="SemiBold"
+                                           Foreground="{StaticResource FgDim}"
+                                           Margin="12,14,8,4"/>
+                                <ItemsControl ItemsSource="{Binding RecentCommits}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Padding="8,4" Margin="4,1"
+                                                    Background="Transparent" CornerRadius="3"
+                                                    ToolTip="{Binding Hash}">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Style.Triggers>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter Property="Background" Value="#2b2b30"/>
+                                                            </Trigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <DockPanel LastChildFill="True">
+                                                    <TextBlock DockPanel.Dock="Left"
+                                                               Text="{Binding ShortHash}"
+                                                               FontFamily="Cascadia Code, Cascadia Mono, Consolas"
+                                                               FontSize="10"
+                                                               Foreground="{StaticResource FgAccent}"
+                                                               VerticalAlignment="Center"
+                                                               Margin="0,0,8,0"/>
+                                                    <TextBlock DockPanel.Dock="Right"
+                                                               Text="{Binding Author}"
+                                                               FontSize="10"
+                                                               Foreground="{StaticResource FgDim}"
+                                                               VerticalAlignment="Center"
+                                                               Margin="8,0,0,0"/>
+                                                    <TextBlock Text="{Binding Subject}"
+                                                               Foreground="{StaticResource FgPrimary}"
+                                                               FontSize="11"
+                                                               VerticalAlignment="Center"
+                                                               TextTrimming="CharacterEllipsis"/>
+                                                </DockPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </ScrollViewer>
                     </DockPanel>
                 </Grid>
             </Border>
         </Grid>
 
-        <GridSplitter Grid.Row="2" Grid.Column="1" Grid.RowSpan="3"
+        <GridSplitter Grid.Row="1" Grid.Column="1" Grid.RowSpan="3"
                       HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                       Width="4" Background="{StaticResource Border2}" Margin="2,0"/>
 
         <!-- ================= PROMPT + TASKS ================= -->
-        <Grid Grid.Row="2" Grid.Column="2" DataContext="{Binding SelectedProject.SelectedConversation}">
+        <Grid Grid.Row="1" Grid.Column="2" DataContext="{Binding SelectedProject.SelectedConversation}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="6"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
-            <DockPanel Grid.Column="0">
+            <Border Grid.Row="0" Grid.ColumnSpan="3"
+                    Background="Transparent"
+                    BorderBrush="{StaticResource Border2}" BorderThickness="0,0,0,1"
+                    Padding="8,0,0,8" Margin="0,0,0,8">
+                <DockPanel LastChildFill="True">
+                    <Button DockPanel.Dock="Right" Style="{StaticResource FlatButton}"
+                            MinWidth="32" Height="32" Padding="6,3"
+                            VerticalAlignment="Top" Margin="8,0,0,6"
+                            Click="OpenConfig_Click"
+                            ToolTip="Open looper.conf in Notepad">
+                        <TextBlock Text="⚙" FontSize="14" VerticalAlignment="Center"/>
+                    </Button>
+
+                    <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,6">
+                            <Label Content="TOOL"/>
+                            <ComboBox Width="124" Height="32"
+                                      ItemsSource="{Binding ToolOptions}"
+                                      SelectedItem="{Binding SelectedToolOption}"
+                                      ItemTemplate="{StaticResource ToolOptionTemplate}"/>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,6">
+                            <Label Content="MODEL"/>
+                            <Button x:Name="ModelPickerButton"
+                                    Width="200" Height="32"
+                                    Click="ModelPickerButton_Click"
+                                    Background="{StaticResource BgInput}"
+                                    Foreground="{StaticResource FgPrimary}"
+                                    BorderBrush="{StaticResource Border1}" BorderThickness="1"
+                                    Cursor="Hand"
+                                    HorizontalContentAlignment="Stretch">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                CornerRadius="4" Padding="8,3">
+                                            <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource FgAccent}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                                <DockPanel LastChildFill="True">
+                                    <TextBlock DockPanel.Dock="Right" Text="▾" Foreground="{StaticResource FgDim}"
+                                               VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    <Grid>
+                                        <TextBlock Text="{Binding ModelText}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   Foreground="{StaticResource FgPrimary}"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock Text="Select model…"
+                                                   Foreground="{StaticResource FgDim}"
+                                                   FontStyle="Italic"
+                                                   VerticalAlignment="Center"
+                                                   IsHitTestVisible="False">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding ModelText}" Value="">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Grid>
+                                </DockPanel>
+                            </Button>
+                            <Popup x:Name="ModelPopup"
+                                   PlacementTarget="{Binding ElementName=ModelPickerButton}"
+                                   Placement="Bottom"
+                                   AllowsTransparency="True" StaysOpen="False"
+                                   PopupAnimation="Fade"
+                                   DataContext="{Binding DataContext.ModelPicker, RelativeSource={RelativeSource AncestorType=Window}}">
+                                <Border Background="{StaticResource BgSurface}"
+                                        BorderBrush="{StaticResource Border1}" BorderThickness="1"
+                                        CornerRadius="8" Padding="8" Width="360" MaxHeight="380"
+                                        SnapsToDevicePixels="True"
+                                        TextElement.Foreground="{StaticResource FgPrimary}">
+                                    <DockPanel LastChildFill="True">
+                                        <DockPanel DockPanel.Dock="Top" Margin="2,0,2,8" LastChildFill="False">
+                                            <TextBlock DockPanel.Dock="Left"
+                                                       Text="{Binding ToolLabel, StringFormat='{}{0} models'}"
+                                                       Foreground="{StaticResource FgPrimary}"
+                                                       FontWeight="SemiBold" FontSize="12"
+                                                       VerticalAlignment="Center"/>
+                                            <TextBlock DockPanel.Dock="Right"
+                                                       VerticalAlignment="Center" FontSize="10"
+                                                       Foreground="{StaticResource FgDim}">
+                                                <Run Text="{Binding TotalCount, Mode=OneWay}"/><Run Text=" total"/>
+                                            </TextBlock>
+                                        </DockPanel>
+                                        <Border DockPanel.Dock="Top" Margin="0,0,0,6"
+                                                Background="{StaticResource BgInput}"
+                                                BorderBrush="{StaticResource Border1}" BorderThickness="1"
+                                                CornerRadius="6">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Style.Triggers>
+                                                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                                            <Setter Property="BorderBrush" Value="{StaticResource FgAccent}"/>
+                                                        </Trigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <Grid>
+                                                <TextBlock Text="🔍" FontSize="11"
+                                                           Foreground="{StaticResource FgDim}"
+                                                           HorizontalAlignment="Left" VerticalAlignment="Center"
+                                                           Margin="10,0,0,0" IsHitTestVisible="False"/>
+                                                <TextBlock Text="Search models…"
+                                                           Foreground="{StaticResource FgDim}"
+                                                           FontStyle="Italic" FontSize="12"
+                                                           HorizontalAlignment="Left" VerticalAlignment="Center"
+                                                           Margin="28,0,0,0" IsHitTestVisible="False">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Search}" Value="">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <TextBox x:Name="ModelSearchBox"
+                                                         Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}"
+                                                         Background="Transparent" BorderThickness="0"
+                                                         Foreground="{StaticResource FgPrimary}"
+                                                         CaretBrush="{StaticResource FgAccent}"
+                                                         SelectionBrush="{StaticResource FgAccent}"
+                                                         SelectionOpacity="0.35"
+                                                         FontSize="12" Padding="28,6,10,6"
+                                                         VerticalContentAlignment="Center"
+                                                         PreviewKeyDown="ModelSearchBox_PreviewKeyDown"/>
+                                            </Grid>
+                                        </Border>
+                                        <DockPanel DockPanel.Dock="Bottom" Margin="2,6,2,0" LastChildFill="False">
+                                            <Button DockPanel.Dock="Left" Content="Refresh from pi"
+                                                    Click="ModelRefresh_Click"
+                                                    Background="Transparent" BorderThickness="0"
+                                                    Foreground="{StaticResource FgAccent}" Cursor="Hand"
+                                                    Padding="0" MinWidth="0" FontSize="11"
+                                                    Visibility="{Binding CanRefreshFromCli, Converter={StaticResource BoolToVis}}"/>
+                                            <Button DockPanel.Dock="Right" Content="Clear selection"
+                                                    Click="ModelClear_Click"
+                                                    Background="Transparent" BorderThickness="0"
+                                                    Foreground="{StaticResource FgDim}" Cursor="Hand"
+                                                    Padding="0" MinWidth="0" FontSize="11"/>
+                                        </DockPanel>
+                                        <ListBox x:Name="ModelList"
+                                                 ItemsSource="{Binding Visible}"
+                                                 Background="Transparent" BorderThickness="0"
+                                                 Foreground="{StaticResource FgPrimary}"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                 MouseDoubleClick="ModelList_MouseDoubleClick"
+                                                 KeyDown="ModelList_KeyDown">
+                                            <ListBox.ItemContainerStyle>
+                                                <Style TargetType="ListBoxItem">
+                                                    <Setter Property="Padding" Value="0"/>
+                                                    <Setter Property="Foreground" Value="{StaticResource FgPrimary}"/>
+                                                    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                                                    <Setter Property="Template">
+                                                        <Setter.Value>
+                                                            <ControlTemplate TargetType="ListBoxItem">
+                                                                <Border x:Name="Bd" Background="Transparent"
+                                                                        CornerRadius="4" Padding="6,5">
+                                                                    <ContentPresenter/>
+                                                                </Border>
+                                                                <ControlTemplate.Triggers>
+                                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                                        <Setter TargetName="Bd" Property="Background" Value="#2b2b30"/>
+                                                                    </Trigger>
+                                                                    <Trigger Property="IsSelected" Value="True">
+                                                                        <Setter TargetName="Bd" Property="Background" Value="{StaticResource Accent}"/>
+                                                                        <Setter Property="Foreground" Value="White"/>
+                                                                    </Trigger>
+                                                                </ControlTemplate.Triggers>
+                                                            </ControlTemplate>
+                                                        </Setter.Value>
+                                                    </Setter>
+                                                </Style>
+                                            </ListBox.ItemContainerStyle>
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <DockPanel LastChildFill="True">
+                                                        <Button DockPanel.Dock="Left"
+                                                                Content="{Binding FavoriteGlyph}"
+                                                                Click="ModelFavoriteToggle_Click"
+                                                                Tag="{Binding}"
+                                                                Background="Transparent" BorderThickness="0"
+                                                                FontSize="14" MinWidth="0" Padding="2,0,8,0"
+                                                                Cursor="Hand" ToolTip="Toggle favorite">
+                                                            <Button.Style>
+                                                                <Style TargetType="Button">
+                                                                    <Setter Property="Foreground" Value="{StaticResource FgDim}"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsFavorite}" Value="True">
+                                                                            <Setter Property="Foreground" Value="#ffd200"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Button.Style>
+                                                        </Button>
+                                                        <TextBlock Text="{Binding Name}"
+                                                                   Foreground="{StaticResource FgPrimary}"
+                                                                   FontFamily="Cascadia Code, Cascadia Mono, Consolas"
+                                                                   FontSize="12"
+                                                                   VerticalAlignment="Center"
+                                                                   TextTrimming="CharacterEllipsis"/>
+                                                    </DockPanel>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
+                                    </DockPanel>
+                                </Border>
+                            </Popup>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,6">
+                            <Label Content="EFFORT"/>
+                            <ComboBox Width="96" Height="32" Style="{StaticResource EditableComboBox}"
+                                      ItemsSource="{Binding EffortSuggestions}"
+                                      Text="{Binding EffortText, UpdateSourceTrigger=LostFocus}"
+                                      ToolTip="low / medium / high / xhigh / max. Blank = CLI default."/>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,6"
+                                    Visibility="{Binding IsPiTool, Converter={StaticResource BoolToVis}}">
+                            <Label Content="SKILLS"/>
+                            <Button x:Name="SkillsButton"
+                                    MinWidth="138" Height="32"
+                                    Click="SkillsButton_Click"
+                                    Background="{StaticResource BgInput}"
+                                    Foreground="{StaticResource FgPrimary}"
+                                    BorderBrush="{StaticResource Border1}" BorderThickness="1"
+                                    Cursor="Hand"
+                                    HorizontalContentAlignment="Stretch"
+                                    ToolTip="Manage Pi skills — toggle on/off, add, delete. Only enabled skills load.">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                CornerRadius="4" Padding="8,3">
+                                            <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource FgAccent}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                                <DockPanel LastChildFill="True">
+                                    <TextBlock DockPanel.Dock="Right" Text="▾" Foreground="{StaticResource FgDim}"
+                                               VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    <TextBlock Text="{Binding SkillsSummary}"
+                                               TextTrimming="CharacterEllipsis"
+                                               VerticalAlignment="Center"/>
+                                </DockPanel>
+                            </Button>
+                            <Popup x:Name="SkillsPopup"
+                                   PlacementTarget="{Binding ElementName=SkillsButton}"
+                                   Placement="Bottom"
+                                   AllowsTransparency="True" StaysOpen="False"
+                                   PopupAnimation="Fade">
+                                <Border Background="{StaticResource BgSurface}"
+                                        BorderBrush="{StaticResource Border1}" BorderThickness="1"
+                                        CornerRadius="8" Padding="8" Width="380" MaxHeight="420"
+                                        SnapsToDevicePixels="True">
+                                    <DockPanel LastChildFill="True">
+                                        <DockPanel DockPanel.Dock="Top" Margin="2,0,2,6" LastChildFill="False">
+                                            <TextBlock DockPanel.Dock="Left" Text="Pi skills"
+                                                       FontWeight="SemiBold" FontSize="12"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{StaticResource FgPrimary}"/>
+                                            <Button DockPanel.Dock="Right" Content="+ New"
+                                                    Click="SkillsAdd_Click"
+                                                    Background="Transparent" BorderThickness="0"
+                                                    Foreground="{StaticResource FgAccent}" Cursor="Hand"
+                                                    Padding="4,0" MinWidth="0" FontSize="11"/>
+                                        </DockPanel>
+                                        <DockPanel DockPanel.Dock="Bottom" Margin="2,6,2,0" LastChildFill="False">
+                                            <Button DockPanel.Dock="Left" Content="Refresh"
+                                                    Click="SkillsRefresh_Click"
+                                                    Background="Transparent" BorderThickness="0"
+                                                    Foreground="{StaticResource FgAccent}" Cursor="Hand"
+                                                    Padding="0" MinWidth="0" FontSize="11"/>
+                                            <TextBlock DockPanel.Dock="Right"
+                                                       VerticalAlignment="Center" FontSize="10"
+                                                       Foreground="{StaticResource FgDim}"
+                                                       Text="{Binding SkillsSummary}"/>
+                                        </DockPanel>
+                                        <ListBox ItemsSource="{Binding Skills}"
+                                                 Background="Transparent" BorderThickness="0"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                 ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                            <ListBox.ItemContainerStyle>
+                                                <Style TargetType="ListBoxItem">
+                                                    <Setter Property="Padding" Value="0"/>
+                                                    <Setter Property="Margin" Value="0,1"/>
+                                                    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                                                    <Setter Property="Template">
+                                                        <Setter.Value>
+                                                            <ControlTemplate TargetType="ListBoxItem">
+                                                                <Border x:Name="Bd" Background="Transparent"
+                                                                        CornerRadius="4" Padding="4,4">
+                                                                    <ContentPresenter/>
+                                                                </Border>
+                                                                <ControlTemplate.Triggers>
+                                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                                        <Setter TargetName="Bd" Property="Background" Value="#2b2b30"/>
+                                                                    </Trigger>
+                                                                </ControlTemplate.Triggers>
+                                                            </ControlTemplate>
+                                                        </Setter.Value>
+                                                    </Setter>
+                                                </Style>
+                                            </ListBox.ItemContainerStyle>
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <DockPanel LastChildFill="True">
+                                                        <CheckBox DockPanel.Dock="Left"
+                                                                  IsChecked="{Binding IsEnabled, Mode=TwoWay}"
+                                                                  VerticalAlignment="Center"
+                                                                  Margin="4,0,10,0"/>
+                                                        <Button DockPanel.Dock="Right"
+                                                                Content="🗑"
+                                                                Click="SkillsDelete_Click"
+                                                                Tag="{Binding}"
+                                                                Background="Transparent" BorderThickness="0"
+                                                                Foreground="{StaticResource FgDim}"
+                                                                Cursor="Hand"
+                                                                Padding="6,0" MinWidth="0" FontSize="13"
+                                                                ToolTip="Delete this skill (removes the SKILL.md directory)"/>
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding Name}"
+                                                                       FontFamily="Cascadia Code, Cascadia Mono, Consolas"
+                                                                       FontSize="12"
+                                                                       Foreground="{StaticResource FgPrimary}"/>
+                                                            <TextBlock Text="{Binding Description}"
+                                                                       FontSize="10" FontStyle="Italic"
+                                                                       Foreground="{StaticResource FgDim}"
+                                                                       TextTrimming="CharacterEllipsis"/>
+                                                            <TextBlock Text="{Binding Origin}"
+                                                                       FontSize="9"
+                                                                       Foreground="{StaticResource FgDim}"/>
+                                                        </StackPanel>
+                                                    </DockPanel>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
+                                    </DockPanel>
+                                </Border>
+                            </Popup>
+                        </StackPanel>
+
+                        <CheckBox Margin="2,0,12,6" MinHeight="32" VerticalAlignment="Center"
+                                  Content="Ralph"
+                                  IsChecked="{Binding RalphEnabled}"
+                                  ToolTip="When off, each Start does exactly one pass (no looping). Max Iter is ignored."/>
+
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,6"
+                                    Visibility="{Binding RalphEnabled, Converter={StaticResource BoolToVis}}">
+                            <Label Content="MAX ITER"/>
+                            <Border BorderBrush="{StaticResource Border1}" BorderThickness="1"
+                                    CornerRadius="4" Background="{StaticResource BgInput}"
+                                    Height="32">
+                                <StackPanel Orientation="Horizontal">
+                                    <RepeatButton Style="{StaticResource StepperButton}"
+                                                  Click="MaxIterDown_Click" Content="−"/>
+                                    <TextBox x:Name="MaxIterBox" Width="36"
+                                             Background="Transparent" BorderThickness="0"
+                                             Text="{Binding MaxIterations, UpdateSourceTrigger=LostFocus}"
+                                             VerticalContentAlignment="Center"
+                                             HorizontalContentAlignment="Center"/>
+                                    <RepeatButton Style="{StaticResource StepperButton}"
+                                                  Click="MaxIterUp_Click" Content="+"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <CheckBox Margin="2,0,0,6" MinHeight="32" VerticalAlignment="Center"
+                                  IsChecked="{Binding KeepContext}"
+                                  Content="Keep context"
+                                  ToolTip="Subsequent iterations resume the previous CLI session (Claude: --resume / Codex: exec resume). Both tools auto-compact when context grows large."/>
+                    </WrapPanel>
+                </DockPanel>
+            </Border>
+
+            <DockPanel x:Name="ConversationPromptPane" Grid.Row="1" Grid.Column="0">
                 <Border DockPanel.Dock="Top" Style="{StaticResource PaneHeaderBar}">
                     <DockPanel LastChildFill="False">
                         <StackPanel Orientation="Horizontal">
@@ -1931,9 +2540,38 @@
                 </Border>
             </DockPanel>
 
-            <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" Background="{StaticResource Border1}"/>
+            <GridSplitter x:Name="ConversationPaneSplitter" Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch" Background="{StaticResource Border1}"/>
 
-            <DockPanel Grid.Column="2">
+            <DockPanel x:Name="InlineGitDiffPanel"
+                       Grid.Row="1" Grid.ColumnSpan="3"
+                       Visibility="Collapsed">
+                <Border DockPanel.Dock="Top" Style="{StaticResource PaneHeaderBar}">
+                    <DockPanel LastChildFill="True">
+                        <Button DockPanel.Dock="Right"
+                                Content="Close"
+                                Style="{StaticResource FlatButton}"
+                                MinWidth="72"
+                                Padding="12,4"
+                                Margin="8,0,0,0"
+                                Click="InlineGitDiffClose_Click"/>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource PaneHeader}" Text="DIFF"/>
+                            <TextBlock x:Name="InlineGitDiffTitle"
+                                       Foreground="{StaticResource FgPrimary}"
+                                       FontFamily="Cascadia Code, Cascadia Mono, Consolas"
+                                       FontSize="12"
+                                       VerticalAlignment="Center"
+                                       Margin="8,0,0,0"
+                                       TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+                <Border Style="{StaticResource PaneFrame}" Background="{StaticResource BgConsole}">
+                    <local:GitDiffViewer x:Name="InlineGitDiffViewer"/>
+                </Border>
+            </DockPanel>
+
+            <DockPanel x:Name="ConversationTasksPane" Grid.Row="1" Grid.Column="2">
                 <Border DockPanel.Dock="Top" Style="{StaticResource PaneHeaderBar}">
                     <DockPanel LastChildFill="False">
                         <StackPanel Orientation="Horizontal">
@@ -1969,11 +2607,11 @@
             </DockPanel>
         </Grid>
 
-        <GridSplitter Grid.Row="3" Grid.Column="2" Height="6"
+        <GridSplitter Grid.Row="2" Grid.Column="2" Height="6"
                       HorizontalAlignment="Stretch" Background="{StaticResource Border1}"/>
 
         <!-- ================= CONSOLE ================= -->
-        <DockPanel Grid.Row="4" Grid.Column="2"
+        <DockPanel Grid.Row="3" Grid.Column="2"
                    DataContext="{Binding SelectedProject.SelectedConversation}">
             <Border DockPanel.Dock="Top" Style="{StaticResource PaneHeaderBar}">
                 <DockPanel LastChildFill="True">
@@ -2278,7 +2916,7 @@
         <!-- ================= STATUS BAR ================= -->
         <!-- Single inline row: no card surface, no border. Padding collapsed
              so the bar sits tight against the console above. -->
-        <DockPanel Grid.Row="5" Grid.ColumnSpan="3" Margin="2,4,2,0"
+        <DockPanel Grid.Row="4" Grid.ColumnSpan="3" Margin="2,4,2,0"
                    LastChildFill="False"
                    DataContext="{Binding SelectedProject.SelectedConversation}">
                 <TextBlock DockPanel.Dock="Left" Text="just code"

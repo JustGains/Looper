@@ -17,6 +17,7 @@ public partial class MainWindow : Window
 {
     private readonly MainViewModel _vm;
     private ProjectViewModel? _subscribedProject;
+    private System.Windows.Threading.DispatcherTimer? _wordWrapTimer;
 
     private static readonly Regex ToolHeaderLine = new(@"^▸\s.+?\(", RegexOptions.Compiled);
     private static readonly Regex ToolResultLine = new(@"^⎿\s", RegexOptions.Compiled);
@@ -39,16 +40,32 @@ public partial class MainWindow : Window
         _vm.ProjectAdded += (_, p) => HookProject(p);
         _vm.ProjectRemoved += (_, p) => UnhookProject(p);
 
-        ConsoleBox.SizeChanged += (_, _) => ApplyWordWrap();
+        // SizeChanged fires on every animation frame during a resize. Throttle
+        // to a DispatcherTimer so we only recompute PageWidth once per burst
+        // — otherwise FlowDocument re-layouts thrash the UI thread.
+        ConsoleBox.SizeChanged += (_, _) =>
+        {
+            if (_wordWrapTimer == null)
+            {
+                _wordWrapTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(60) };
+                _wordWrapTimer.Tick += (_, _) => { _wordWrapTimer!.Stop(); ApplyWordWrap(); };
+            }
+            _wordWrapTimer.Stop();
+            _wordWrapTimer.Start();
+        };
 
         Loaded += (_, _) =>
         {
+            // Kick icon warmup off the UI thread before any tree renders —
+            // SharpVectors class init is otherwise paid on the first render.
+            FileIconService.Prewarm();
             _vm.InitializeTabs(Directory.GetCurrentDirectory());
             foreach (var p in _vm.Projects) HookProject(p);
             SubscribeToSelectedProject();
             AttachSelectedConversationDocument();
             ApplyWordWrap();
             AttachMentionHighlightAdorner();
+            UpdateActivityBarStyles();
         };
 
         Closing += (_, _) => _vm.SaveWindowBounds(Left, Top, Width, Height);
@@ -93,13 +110,53 @@ public partial class MainWindow : Window
             OnConversationConsoleAppend(c, history);
     }
 
-    private void UnhookConversation(ConversationViewModel c) =>
+    private void UnhookConversation(ConversationViewModel c)
+    {
         c.ConsoleAppend -= OnConversationConsoleAppend;
+        if (_consoleFlushTimers.TryGetValue(c, out var timer))
+        {
+            timer.Stop();
+            _consoleFlushTimers.Remove(c);
+        }
+        _consoleBuffers.Remove(c);
+    }
+
+    /// Per-conversation buffer of pending chunks. Rapidly-streaming models
+    /// (Claude, Codex, pi) can emit hundreds of deltas per second. Appending
+    /// each to the FlowDocument separately forces a re-layout per delta;
+    /// coalescing into a single ~60 Hz flush cuts render time dramatically.
+    private readonly Dictionary<ConversationViewModel, System.Text.StringBuilder> _consoleBuffers = new();
+    private readonly Dictionary<ConversationViewModel, System.Windows.Threading.DispatcherTimer> _consoleFlushTimers = new();
+    private const int ConsoleFlushIntervalMs = 16;
 
     private void OnConversationConsoleAppend(object? sender, string chunk)
     {
-        if (sender is not ConversationViewModel c) return;
-        AppendStyled(c, chunk);
+        if (sender is not ConversationViewModel c || string.IsNullOrEmpty(chunk)) return;
+        if (!_consoleBuffers.TryGetValue(c, out var sb))
+        {
+            sb = new System.Text.StringBuilder();
+            _consoleBuffers[c] = sb;
+        }
+        sb.Append(chunk);
+        if (!_consoleFlushTimers.TryGetValue(c, out var timer))
+        {
+            timer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(ConsoleFlushIntervalMs),
+            };
+            timer.Tick += (_, _) => FlushConsoleBuffer(c);
+            _consoleFlushTimers[c] = timer;
+        }
+        if (!timer.IsEnabled) timer.Start();
+    }
+
+    private void FlushConsoleBuffer(ConversationViewModel c)
+    {
+        if (_consoleFlushTimers.TryGetValue(c, out var timer)) timer.Stop();
+        if (!_consoleBuffers.TryGetValue(c, out var sb) || sb.Length == 0) return;
+        var pending = sb.ToString();
+        sb.Clear();
+        AppendStyled(c, pending);
         if (ReferenceEquals(c, _vm.SelectedProject?.SelectedConversation)
             && _vm.AutoScrollConsole)
         {
@@ -113,10 +170,12 @@ public partial class MainWindow : Window
     {
         if (e.PropertyName == nameof(MainViewModel.SelectedProject))
         {
+            CloseInlineGitDiff();
             SubscribeToSelectedProject();
             AttachSelectedConversationDocument();
             ApplyWordWrap();
             QueueScrollTasks();
+            UpdateActivityBarStyles();
         }
         else if (e.PropertyName == nameof(MainViewModel.WordWrapConsole))
         {
@@ -141,6 +200,7 @@ public partial class MainWindow : Window
     {
         if (e.PropertyName == nameof(ProjectViewModel.SelectedConversation))
         {
+            CloseInlineGitDiff();
             AttachSelectedConversationDocument();
             ApplyWordWrap();
             QueueScrollTasks();
@@ -219,8 +279,33 @@ public partial class MainWindow : Window
         }
     }
 
+    private static bool IsPlainText(string s)
+    {
+        for (int i = 0; i < s.Length; i++)
+        {
+            char c = s[i];
+            if (char.IsLetterOrDigit(c) || c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\'' || c == ',' || c == '.' || c == ';') continue;
+            if (_stylingTriggerChars.Contains(c)) return false;
+            // Anything non-ASCII (emoji/arrows/box drawing) is treated as a
+            // potential match — styling rules DO use 🧠 ⎿ ▸ etc. for block
+            // markers, so we can't short-circuit when those appear.
+            if (c > 127) return false;
+        }
+        return true;
+    }
+
+    /// Cap on live `Run` inlines in the console FlowDocument. After a long
+    /// session this grows without bound and WPF text layout cost is roughly
+    /// linear in the number of inlines — keystroke latency creeps up once
+    /// the doc passes ~10k runs. We drop the oldest half whenever we cross
+    /// the limit, which keeps the console feeling responsive forever while
+    /// preserving the tail the user actually cares about.
+    private const int MaxConsoleInlines = 8000;
+    private const int TrimToConsoleInlines = 4000;
+
     private void AppendStyled(ConversationViewModel c, string chunk)
     {
+        var inlines = c.ConsoleParagraph.Inlines;
         foreach (var (text, rule) in Tokenize(ApplyCollapse(chunk)))
         {
             var run = new Run(text);
@@ -229,7 +314,23 @@ public partial class MainWindow : Window
             if (rule?.WeightValue is { } w) run.FontWeight = w;
             if (rule?.StyleValue is { } fs) run.FontStyle = fs;
             if (rule?.Underline == true) run.TextDecorations = TextDecorations.Underline;
-            c.ConsoleParagraph.Inlines.Add(run);
+            inlines.Add(run);
+        }
+        if (inlines.Count > MaxConsoleInlines) TrimInlines(inlines);
+    }
+
+    private static void TrimInlines(System.Windows.Documents.InlineCollection inlines)
+    {
+        // Drop the oldest runs until we're back under TrimToConsoleInlines.
+        // Done in a batch rather than per-append to avoid pathological O(N²)
+        // behaviour when bursting past the threshold.
+        int toRemove = inlines.Count - TrimToConsoleInlines;
+        var first = inlines.FirstInline;
+        while (toRemove-- > 0 && first != null)
+        {
+            var next = first.NextInline;
+            inlines.Remove(first);
+            first = next;
         }
     }
 
@@ -269,10 +370,30 @@ public partial class MainWindow : Window
         return sb.ToString();
     }
 
+    /// ASCII characters that nearly every styling regex depends on. A chunk
+    /// with only letters/digits/whitespace can't possibly match any rule, so
+    /// we skip the O(rules × length) regex loop entirely for that common
+    /// case. Kept to ASCII for cheap scanning — the few Unicode-glyph rules
+    /// (▸⎿🧠 etc.) always co-occur with ASCII structural chars, so we don't
+    /// miss anything in practice.
+    private static readonly System.Collections.Generic.HashSet<char> _stylingTriggerChars = new()
+    {
+        '[', ']', '{', '}', '(', ')', '<', '>', '/', '\\', '#', '@',
+        '=', '!', '"', '*', ':', '|', '-', '+', '?'
+    };
+
     private IEnumerable<(string text, StylingRule? rule)> Tokenize(string chunk)
     {
         var rules = _vm.Settings.StylingRules;
         if (rules.Count == 0 || string.IsNullOrEmpty(chunk))
+        {
+            yield return (chunk, null);
+            yield break;
+        }
+
+        // Fast path: pure alphanumeric + whitespace text can't match any rule.
+        // Saves 20-30 regex invocations on every plain-text streaming delta.
+        if (IsPlainText(chunk))
         {
             yield return (chunk, null);
             yield break;
@@ -1205,7 +1326,27 @@ public partial class MainWindow : Window
     {
         if (sender is not Button b || b.Tag is not string tag) return;
         var project = _vm.SelectedProject;
-        if (project != null) project.SidebarTab = tag;
+        if (project == null) return;
+        project.SidebarTab = tag;
+        UpdateActivityBarStyles();
+    }
+
+    /// Apply the "active" style to whichever activity-bar button matches the
+    /// current project's SidebarTab. Doing this in code-behind beats the
+    /// MultiDataTrigger + per-button Opacity binding we had before: that path
+    /// re-evaluated across every button on every ProjectViewModel PropertyChanged
+    /// pulse, which showed up as visible jank when toggling tabs.
+    private void UpdateActivityBarStyles()
+    {
+        var active = _vm.SelectedProject?.SidebarTab ?? "conversations";
+        var baseStyle = (Style)FindResource("ActivityBarButton");
+        var activeStyle = (Style)FindResource("ActivityBarButtonActive");
+        if (TabFilesButton != null)
+            TabFilesButton.Style = active == "files" ? activeStyle : baseStyle;
+        if (TabConversationsButton != null)
+            TabConversationsButton.Style = active == "conversations" ? activeStyle : baseStyle;
+        if (TabGitButton != null)
+            TabGitButton.Style = active == "git" ? activeStyle : baseStyle;
     }
 
     private void FilesRefresh_Click(object sender, RoutedEventArgs e)
@@ -1221,13 +1362,25 @@ public partial class MainWindow : Window
         }
     }
 
-    private static FileNode? GetContextFileNode(object sender)
+    private FileNode? GetContextFileNode(object sender)
     {
-        if (sender is not MenuItem mi) return null;
-        // The parent ContextMenu's PlacementTarget is the TreeViewItem container.
-        var cm = mi.Parent as ContextMenu ?? ((MenuItem)mi.Parent).Parent as ContextMenu;
-        if (cm?.PlacementTarget is FrameworkElement fe && fe.DataContext is FileNode n) return n;
+        // ContextMenu is shared on the TreeView (not per-TreeViewItem) for
+        // perf, so the clicked FileNode has to come from TreeView.SelectedItem.
+        // Right-click selects the target via FileTree_PreviewMouseRightButtonDown.
+        if (FileTree?.SelectedItem is FileNode n) return n;
         return null;
+    }
+
+    /// Walk up the visual tree from the right-clicked element to the
+    /// TreeViewItem and select it. WPF doesn't auto-select on right-click,
+    /// so we'd otherwise open the menu against whatever item was already
+    /// selected (usually the wrong one).
+    private void FileTree_PreviewMouseRightButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        var dep = e.OriginalSource as DependencyObject;
+        while (dep != null && dep is not TreeViewItem)
+            dep = VisualTreeHelper.GetParent(dep);
+        if (dep is TreeViewItem tvi) tvi.IsSelected = true;
     }
 
     private void FileNodeOpen_Click(object sender, RoutedEventArgs e)
@@ -1257,6 +1410,224 @@ public partial class MainWindow : Window
             Clipboard.SetText(rel);
         }
         catch { }
+    }
+
+    // ---------- Git panel ----------
+
+    private GitViewModel? Git => _vm.SelectedProject?.Git;
+
+    private async void GitRefresh_Click(object sender, RoutedEventArgs e)
+        { if (Git != null) await Git.RefreshAsync(); }
+    private async void GitFetch_Click(object sender, RoutedEventArgs e)
+        { if (Git != null) await Git.FetchAsync(); }
+    private async void GitPull_Click(object sender, RoutedEventArgs e)
+        { if (Git != null) await Git.PullAsync(); }
+    private async void GitPush_Click(object sender, RoutedEventArgs e)
+        { if (Git != null) await Git.PushAsync(); }
+
+    private async void GitStage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button b && b.Tag is GitFileRow row && Git != null)
+        { await Git.StageAsync(row); e.Handled = true; }
+    }
+    private async void GitUnstage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button b && b.Tag is GitFileRow row && Git != null)
+        { await Git.UnstageAsync(row); e.Handled = true; }
+    }
+    private async void GitDiscard_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button b || b.Tag is not GitFileRow row || Git == null) return;
+        var confirm = MessageBox.Show(this,
+            $"Discard changes to {row.FullPath}?\n\nThis cannot be undone.",
+            "Discard changes", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+        if (confirm != MessageBoxResult.OK) { e.Handled = true; return; }
+        await Git.DiscardAsync(row); e.Handled = true;
+    }
+    private async void GitStageAll_Click(object sender, RoutedEventArgs e)
+        { if (Git != null) await Git.StageAllAsync(); }
+    private async void GitUnstageAll_Click(object sender, RoutedEventArgs e)
+        { if (Git != null) await Git.UnstageAllAsync(); }
+
+    private async void GitCommit_Click(object sender, RoutedEventArgs e)
+    {
+        GitCommitBox?.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        if (Git != null) await Git.CommitAsync();
+    }
+    private async void GitAmend_Click(object sender, RoutedEventArgs e)
+    {
+        GitCommitBox?.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        if (Git != null) await Git.AmendAsync();
+    }
+    private async void GitStash_Click(object sender, RoutedEventArgs e)
+    {
+        GitCommitBox?.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        if (Git != null) await Git.StashAsync();
+    }
+
+    private async void GitAiMessage_Click(object sender, RoutedEventArgs e)
+    {
+        if (Git != null) await Git.GenerateMessageWithAIAsync();
+    }
+
+    private void GitMoreActions_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button b || b.ContextMenu == null) return;
+        b.ContextMenu.PlacementTarget = b;
+        b.ContextMenu.IsOpen = true;
+        e.Handled = true;
+    }
+
+    private async void GitCommitBox_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Enter &&
+            (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control)
+                == System.Windows.Input.ModifierKeys.Control)
+        {
+            e.Handled = true;
+            GitCommitBox?.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            if (Git != null) await Git.CommitAsync();
+        }
+    }
+
+    private void GitDismissError_Click(object sender, RoutedEventArgs e)
+    {
+        // Setter is private on the VM; easiest: kick a refresh which clears
+        // the error on success. Failing that, leave the banner — user can
+        // click the × again after the next successful action.
+        _ = Git?.RefreshAsync();
+    }
+
+    private void GitBranch_Click(object sender, RoutedEventArgs e)
+    {
+        if (Git == null) return;
+        GitBranchList.SelectedItem = Git.CurrentBranch;
+        GitBranchPopup.IsOpen = true;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (GitBranchList.SelectedItem != null)
+                GitBranchList.ScrollIntoView(GitBranchList.SelectedItem);
+        }), System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    private async void GitBranchList_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (GitBranchList.SelectedItem is string branch && Git != null)
+        {
+            GitBranchPopup.IsOpen = false;
+            await Git.CheckoutAsync(branch);
+        }
+    }
+
+    private async void GitCreateBranch_Click(object sender, RoutedEventArgs e)
+    {
+        if (Git == null) return;
+        GitBranchPopup.IsOpen = false;
+        var dlg = new SkillNameDialog
+        {
+            Owner = this,
+            Title = "New branch",
+            FieldLabelText = "Branch name",
+            HintTextValue = "Creates and checks out the new branch from HEAD.",
+        };
+        if (dlg.ShowDialog() != true) return;
+        await Git.CreateBranchAsync(dlg.SkillName);
+    }
+
+    private async void GitStagedRow_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (IsClickInsideButton(e.OriginalSource as DependencyObject)) return;
+        if (sender is FrameworkElement fe && fe.DataContext is GitFileRow row)
+            await ShowGitDiffAsync(row);
+    }
+
+    private async void GitUnstagedRow_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (IsClickInsideButton(e.OriginalSource as DependencyObject)) return;
+        if (sender is FrameworkElement fe && fe.DataContext is GitFileRow row)
+            await ShowGitDiffAsync(row);
+    }
+
+    private static bool IsClickInsideButton(DependencyObject? origin)
+    {
+        while (origin != null)
+        {
+            if (origin is Button) return true;
+            origin = origin switch
+            {
+                FrameworkContentElement fce => fce.Parent,
+                Visual => VisualTreeHelper.GetParent(origin),
+                _ => null,
+            };
+        }
+        return false;
+    }
+
+    private async Task ShowGitDiffAsync(GitFileRow row)
+    {
+        var wd = _vm.SelectedProject?.WorkingDirectory;
+        if (string.IsNullOrEmpty(wd)) return;
+
+        string diff = "";
+        try
+        {
+            diff = await GitService.DiffAsync(wd, row.FullPath, row.IsStagedGroup);
+            if (string.IsNullOrWhiteSpace(diff))
+                diff = await BuildSyntheticDiffIfNeededAsync(wd, row);
+        }
+        catch { }
+
+        if (string.IsNullOrWhiteSpace(diff))
+            diff = $"No textual diff available for {row.FullPath}.\n\nThis can happen for binary files, empty diffs, or some Git states.";
+
+        var fullPath = Path.Combine(wd, row.FullPath);
+        InlineGitDiffTitle.Text = row.FullPath;
+        InlineGitDiffViewer.SetDiff(diff, fullPath);
+        ConversationPromptPane.Visibility = Visibility.Collapsed;
+        ConversationPaneSplitter.Visibility = Visibility.Collapsed;
+        ConversationTasksPane.Visibility = Visibility.Collapsed;
+        InlineGitDiffPanel.Visibility = Visibility.Visible;
+    }
+
+    private void InlineGitDiffClose_Click(object sender, RoutedEventArgs e)
+    {
+        CloseInlineGitDiff();
+    }
+
+    private void CloseInlineGitDiff()
+    {
+        if (InlineGitDiffPanel == null) return;
+        InlineGitDiffPanel.Visibility = Visibility.Collapsed;
+        if (ConversationPromptPane != null) ConversationPromptPane.Visibility = Visibility.Visible;
+        if (ConversationPaneSplitter != null) ConversationPaneSplitter.Visibility = Visibility.Visible;
+        if (ConversationTasksPane != null) ConversationTasksPane.Visibility = Visibility.Visible;
+    }
+
+    private static async Task<string> BuildSyntheticDiffIfNeededAsync(string wd, GitFileRow row)
+    {
+        bool likelyUntracked = (!row.IsStagedGroup && row.Change.WorkingKind == GitChangeKind.Untracked)
+                              || (row.IsStagedGroup && row.Change.IndexKind == GitChangeKind.Untracked);
+        if (!likelyUntracked) return "";
+
+        var full = Path.Combine(wd, row.FullPath);
+        if (!File.Exists(full)) return "";
+
+        string text;
+        try { text = await File.ReadAllTextAsync(full); }
+        catch { return ""; }
+
+        var normalized = text.Replace("\r\n", "\n");
+        var lines = normalized.Split('\n');
+        var lineCount = normalized.Length == 0 ? 0 : lines.Length;
+        var body = string.Join("\n", lines.Select(l => "+" + l));
+        if (body.Length > 0 && !body.EndsWith("\n")) body += "\n";
+
+        return $"diff --git a/{row.FullPath} b/{row.FullPath}\n" +
+               $"new file mode 100644\n" +
+               $"--- /dev/null\n" +
+               $"+++ b/{row.FullPath}\n" +
+               (lineCount > 0 ? $"@@ -0,0 +1,{lineCount} @@\n" : "") +
+               body;
     }
 
     // ---------- package.json launcher ----------
