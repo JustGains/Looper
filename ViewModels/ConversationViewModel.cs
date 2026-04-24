@@ -14,6 +14,17 @@ public sealed class QueuedChatMessage : INotifyPropertyChanged
 {
     public event PropertyChangedEventHandler? PropertyChanged;
     public string Id { get; } = Guid.NewGuid().ToString("N");
+
+    // Cached event args — these property names fire on every queue edit, so
+    // pre-allocating the PropertyChangedEventArgs once per property saves
+    // N-per-event allocations on ObservableCollection refresh and typing.
+    private static readonly PropertyChangedEventArgs TextArgs = new(nameof(Text));
+    private static readonly PropertyChangedEventArgs TooltipArgs = new(nameof(TooltipText));
+    private static readonly PropertyChangedEventArgs ActiveArgs = new(nameof(IsActive));
+    private static readonly PropertyChangedEventArgs HeadArgs = new(nameof(IsHead));
+    private static readonly PropertyChangedEventArgs FirstArgs = new(nameof(IsFirst));
+    private static readonly PropertyChangedEventArgs LastArgs = new(nameof(IsLast));
+
     private string _text;
     public string Text
     {
@@ -22,9 +33,92 @@ public sealed class QueuedChatMessage : INotifyPropertyChanged
         {
             if (_text == value) return;
             _text = value;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Text)));
+            var h = PropertyChanged;
+            if (h == null) return;
+            h(this, TextArgs);
+            h(this, TooltipArgs);
         }
     }
+
+    /// Hover tooltip for the chip: the full message text followed by a
+    /// dim footer with char + token estimate so the user can size up the
+    /// payload before it's injected.
+    public string TooltipText
+    {
+        get
+        {
+            var t = _text ?? "";
+            int chars = t.Length;
+            if (chars == 0) return t;
+            var tokenPart = TextStats.FormatTokens(TextStats.ApproxTokens(chars));
+            var stats = tokenPart.Length > 0
+                ? $"{chars:N0} chars · {tokenPart}"
+                : $"{chars:N0} chars";
+            return $"{t}\n\n— {stats}";
+        }
+    }
+
+    /// True when this chip is the one currently loaded into the chat input
+    /// via Up/Down recall or click-to-edit. The XAML binds an accent border
+    /// to this flag so the user sees which chip their edits are flowing into.
+    private bool _isActive;
+    public bool IsActive
+    {
+        get => _isActive;
+        internal set
+        {
+            if (_isActive == value) return;
+            _isActive = value;
+            PropertyChanged?.Invoke(this, ActiveArgs);
+        }
+    }
+
+    /// True for the chip at index 0 — i.e. the next one the LoopRunner will
+    /// inject. The XAML uses this to render a small "NEXT" pill so the user
+    /// sees the dequeue order at a glance.
+    private bool _isHead;
+    public bool IsHead
+    {
+        get => _isHead;
+        internal set
+        {
+            if (_isHead == value) return;
+            _isHead = value;
+            PropertyChanged?.Invoke(this, HeadArgs);
+        }
+    }
+
+    /// True when this chip is at index 0. The XAML binds the ▲ (move up)
+    /// button's IsEnabled to `!IsFirst` so the button auto-disables on the
+    /// head chip without needing any code-behind guard. Semantically
+    /// overlaps with IsHead but IsHead is suppressed when there's only
+    /// one chip — the boundary buttons care about raw position only.
+    private bool _isFirst;
+    public bool IsFirst
+    {
+        get => _isFirst;
+        internal set
+        {
+            if (_isFirst == value) return;
+            _isFirst = value;
+            PropertyChanged?.Invoke(this, FirstArgs);
+        }
+    }
+
+    /// True when this chip is at index `Count - 1`. Bound to the ▼ button's
+    /// IsEnabled so reordering controls self-indicate the boundaries.
+    private bool _isLast;
+    public bool IsLast
+    {
+        get => _isLast;
+        internal set
+        {
+            if (_isLast == value) return;
+            _isLast = value;
+            PropertyChanged?.Invoke(this, LastArgs);
+        }
+    }
+
     public QueuedChatMessage(string text) { _text = text; }
 }
 
@@ -56,6 +150,10 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
 
     public FlowDocument ConsoleDocument { get; }
     public Paragraph ConsoleParagraph { get; }
+    public FlowDocument ConversationConsoleDocument { get; }
+    public Paragraph ConversationConsoleParagraph { get; }
+    public FlowDocument ToolConsoleDocument { get; }
+    public Paragraph ToolConsoleParagraph { get; }
 
     public string Name
     {
@@ -69,6 +167,27 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
             OnChanged();
         }
     }
+
+    /// Pin sticks the conversation to the top of its project's list,
+    /// regardless of creation order. Toggled from the conversation row
+    /// context menu / pin icon; persisted in settings so pins survive
+    /// app restarts. Owning `ProjectViewModel` listens for this change
+    /// and re-sorts its `Conversations` list.
+    public bool IsPinned
+    {
+        get => _settings.IsPinned;
+        set
+        {
+            if (_settings.IsPinned == value) return;
+            _settings.IsPinned = value;
+            PersistSettings();
+            // ProjectViewModel observes this via PropertyChanged and calls
+            // ResortConversations(), which is the only consumer — no need
+            // for a separate PinChanged event.
+            OnChanged();
+        }
+    }
+    public void TogglePin() => IsPinned = !IsPinned;
 
     private bool _isEditingName;
     public bool IsEditingName
@@ -105,12 +224,13 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
             _settings.Tool = value;
             PersistSettings();
             OnChanged();
-            OnChanged(nameof(SelectedToolOption));
-            OnChanged(nameof(ModelText));
-            OnChanged(nameof(EffortText));
-            OnChanged(nameof(ModelSuggestions));
-            OnChanged(nameof(EffortSuggestions));
-            OnChanged(nameof(IsPiTool));
+            OnChangedMany(
+                nameof(SelectedToolOption),
+                nameof(ModelText),
+                nameof(EffortText),
+                nameof(ModelSuggestions),
+                nameof(EffortSuggestions),
+                nameof(IsPiTool));
         }
     }
 
@@ -268,6 +388,8 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
             PersistSettings();
             OnChanged();
             OnChanged(nameof(IterationLabel));
+            OnChanged(nameof(PrimaryActionText));
+            OnChanged(nameof(IsPrimaryActionStart));
         }
     }
 
@@ -316,6 +438,7 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
             if (_tasksText == value) return;
             _tasksText = value;
             OnChanged();
+            QueueTaskProjectionRefresh();
             if (!_suppressTasksSave)
             {
                 _tasksSaveDebounce.Stop();
@@ -323,6 +446,65 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
             }
         }
     }
+
+    private TaskViewFilter _taskPreviewFilter = TaskViewFilter.All;
+    public string TaskPreviewMarkdown
+    {
+        get => _taskPreviewMarkdown;
+        private set
+        {
+            if (_taskPreviewMarkdown == value) return;
+            _taskPreviewMarkdown = value;
+            OnChanged();
+        }
+    }
+    private string _taskPreviewMarkdown = "";
+
+    private int _summaryCount;
+    public int SummaryCount
+    {
+        get => _summaryCount;
+        private set { if (_summaryCount != value) { _summaryCount = value; OnChanged(); } }
+    }
+
+    public bool ShowAllTaskPreview
+    {
+        get => _taskPreviewFilter == TaskViewFilter.All;
+        set { if (value) SetTaskPreviewFilter(TaskViewFilter.All); }
+    }
+
+    public bool ShowOpenTaskPreview
+    {
+        get => _taskPreviewFilter == TaskViewFilter.Open;
+        set { if (value) SetTaskPreviewFilter(TaskViewFilter.Open); }
+    }
+
+    public bool ShowDoneTaskPreview
+    {
+        get => _taskPreviewFilter == TaskViewFilter.Done;
+        set { if (value) SetTaskPreviewFilter(TaskViewFilter.Done); }
+    }
+
+    public bool ShowSummaryTaskPreview
+    {
+        get => _taskPreviewFilter == TaskViewFilter.Summaries;
+        set { if (value) SetTaskPreviewFilter(TaskViewFilter.Summaries); }
+    }
+
+    public bool ShowLatestSummaryTaskPreview
+    {
+        get => _taskPreviewFilter == TaskViewFilter.LatestSummary;
+        set { if (value) SetTaskPreviewFilter(TaskViewFilter.LatestSummary); }
+    }
+
+    public string TaskPreviewFilterLabel => _taskPreviewFilter switch
+    {
+        TaskViewFilter.Open => "Open",
+        TaskViewFilter.Done => "Done",
+        TaskViewFilter.Summaries => "Summaries",
+        TaskViewFilter.LatestSummary => "Latest summary",
+        _ => "All",
+    };
 
     private int _currentIteration;
     public int CurrentIteration
@@ -333,8 +515,26 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
 
     public string IterationLabel =>
         $"Iteration: {CurrentIteration} / {(_settings.RalphEnabled ? _settings.MaxIterations : 1)}";
-    public string IterationElapsedText => FormatElapsed(_iterStartUtc);
-    public string TotalElapsedText => FormatElapsed(_totalStartUtc);
+    // Cached "mm:ss" renderings driven off the 500 ms UI tick. The tick
+    // polls twice per second but the rendered value only ticks once per
+    // second — caching lets us skip the redundant PropertyChanged on the
+    // unchanged half-step, saving a binding rebind.
+    private string _iterElapsedCache = TimeFormat.Placeholder;
+    private string _totalElapsedCache = TimeFormat.Placeholder;
+    public string IterationElapsedText => _iterElapsedCache;
+    public string TotalElapsedText => _totalElapsedCache;
+
+    /// Refresh cached elapsed strings. Fires PropertyChanged only on actual
+    /// change. Returns true if either value changed.
+    private bool RefreshElapsedCaches()
+    {
+        bool any = false;
+        var iter = TimeFormat.Elapsed(_iterStartUtc);
+        if (iter != _iterElapsedCache) { _iterElapsedCache = iter; OnChanged(nameof(IterationElapsedText)); any = true; }
+        var total = TimeFormat.Elapsed(_totalStartUtc);
+        if (total != _totalElapsedCache) { _totalElapsedCache = total; OnChanged(nameof(TotalElapsedText)); any = true; }
+        return any;
+    }
 
     private string _status = "Idle";
     public string Status
@@ -353,13 +553,31 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
             _isRunning = value;
             OnChanged();
             OnChanged(nameof(StartStopText));
+            OnChanged(nameof(PrimaryActionText));
+            OnChanged(nameof(IsPrimaryActionStart));
         }
     }
 
     public string StartStopText => IsRunning ? "Stop" : "Start";
 
+    /// Label for the merged chat-bar action button. Says "Start" only when
+    /// idle with an empty queue and Ralph mode on (the loop has nothing to
+    /// send so the button kicks off the loop). Otherwise "Send" — either to
+    /// queue a chat-only run or to inject mid-run.
+    public string PrimaryActionText => IsPrimaryActionStart ? "Start" : "Send";
+
+    public bool IsPrimaryActionStart =>
+        !IsRunning && QueuedMessages.Count == 0 && RalphEnabled
+        && string.IsNullOrWhiteSpace(_chatInput);
+
     /// Sessions older than this are treated as too stale to resume cleanly.
     private static readonly TimeSpan SessionTTL = TimeSpan.FromHours(24);
+
+    /// True when `stamp` is older than <see cref="SessionTTL"/> or `null`
+    /// (no stamp means we can't prove the session is fresh, so treat it
+    /// as expired — the worst case is starting a new session).
+    private static bool IsSessionStampExpired(DateTime? stamp) =>
+        stamp is not DateTime ts || DateTime.UtcNow - ts > SessionTTL;
 
     private string? _currentSessionId;
     public string? CurrentSessionId
@@ -379,6 +597,18 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     }
 
     public bool HasSession => !string.IsNullOrEmpty(_currentSessionId);
+
+    /// Adopt an externally-issued session id (e.g. one captured from a
+    /// `claude` run outside the app) so the next Start/Send resumes that
+    /// conversation instead of opening a fresh one. The CLI receives this
+    /// id verbatim via `--resume`; we also stamp the timestamp so the
+    /// SessionTTL check on next load doesn't immediately expire it.
+    public void ImportSessionId(string sessionId)
+    {
+        var trimmed = (sessionId ?? "").Trim();
+        if (trimmed.Length == 0) return;
+        CurrentSessionId = trimmed;
+    }
 
     // ---- clipboard-copy feedback for the session pill ----
     private bool _isSessionCopied;
@@ -417,15 +647,36 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     }
 
     private long _inputTokens, _outputTokens, _cachedTokens;
-    public long InputTokens { get => _inputTokens; private set { if (_inputTokens != value) { _inputTokens = value; OnChanged(); OnChanged(nameof(TokenSummary)); } } }
-    public long OutputTokens { get => _outputTokens; private set { if (_outputTokens != value) { _outputTokens = value; OnChanged(); OnChanged(nameof(TokenSummary)); } } }
-    public long CachedTokens { get => _cachedTokens; private set { if (_cachedTokens != value) { _cachedTokens = value; OnChanged(); OnChanged(nameof(TokenSummary)); } } }
+    public long InputTokens { get => _inputTokens; private set { if (_inputTokens != value) { _inputTokens = value; OnChanged(); InvalidateTokenSummary(); } } }
+    public long OutputTokens { get => _outputTokens; private set { if (_outputTokens != value) { _outputTokens = value; OnChanged(); InvalidateTokenSummary(); } } }
+    public long CachedTokens { get => _cachedTokens; private set { if (_cachedTokens != value) { _cachedTokens = value; OnChanged(); InvalidateTokenSummary(); } } }
 
     private int _toolCallCount;
     public int ToolCallCount
     {
         get => _toolCallCount;
         private set { if (_toolCallCount != value) { _toolCallCount = value; OnChanged(); } }
+    }
+
+    private int _allConsoleLineCount;
+    public int AllConsoleLineCount
+    {
+        get => _allConsoleLineCount;
+        private set { if (_allConsoleLineCount != value) { _allConsoleLineCount = value; OnChanged(); } }
+    }
+
+    private int _conversationConsoleLineCount;
+    public int ConversationConsoleLineCount
+    {
+        get => _conversationConsoleLineCount;
+        private set { if (_conversationConsoleLineCount != value) { _conversationConsoleLineCount = value; OnChanged(); } }
+    }
+
+    private int _toolConsoleLineCount;
+    public int ToolConsoleLineCount
+    {
+        get => _toolConsoleLineCount;
+        private set { if (_toolConsoleLineCount != value) { _toolConsoleLineCount = value; OnChanged(); } }
     }
 
     // ---- pinned-response surface ----
@@ -522,6 +773,30 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<QueuedChatMessage> QueuedMessages { get; } = new();
 
     public bool HasQueuedMessages => QueuedMessages.Count > 0;
+    public int QueuedCount => QueuedMessages.Count;
+    /// "Clear all" is only offered when there are ≥2 items — for a single
+    /// chip, the per-chip ✕ button is already right next to the text.
+    public bool CanClearQueue => QueuedMessages.Count >= 2;
+
+    /// Subtle "N queued · ~M tok" caption above the chips. Dirty-flagged so
+    /// multiple binding reads per change (TextBlock.Text + Visibility trigger)
+    /// don't re-walk the queue on each read. `InvalidateQueueHeader()` marks
+    /// it dirty; the next get recomputes and stashes the result. Walks are
+    /// O(N) — N is small but skipping them is still cheaper than walking.
+    private DirtyMemo<string> _queueHeaderLabel = DirtyMemo<string>.Empty();
+    private void InvalidateQueueHeader() => _queueHeaderLabel.Invalidate();
+    public string QueueHeaderLabel => _queueHeaderLabel.Read(ComputeQueueHeaderLabel);
+
+    private string ComputeQueueHeaderLabel()
+    {
+        int count = QueuedMessages.Count;
+        if (count == 0) return "";
+        int chars = 0;
+        for (int i = 0; i < count; i++) chars += QueuedMessages[i].Text?.Length ?? 0;
+        var countPart = count == 1 ? "1 queued" : $"{count} queued";
+        var tokenPart = TextStats.FormatTokens(TextStats.ApproxTokens(chars));
+        return tokenPart.Length > 0 ? $"{countPart} · {tokenPart}" : countPart;
+    }
 
     /// -1 when the chat box holds a new draft; 0..Count-1 when navigating
     /// previously-queued items via Up/Down for editing. Edits to `ChatInput`
@@ -530,7 +805,61 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     public int ChatRecallIndex
     {
         get => _chatRecallIndex;
-        private set { if (_chatRecallIndex != value) { _chatRecallIndex = value; OnChanged(); OnChanged(nameof(IsRecallingQueued)); } }
+        private set
+        {
+            if (_chatRecallIndex == value) return;
+            _chatRecallIndex = value;
+            OnChanged();
+            OnChanged(nameof(IsRecallingQueued));
+            RefreshQueueActiveFlags();
+        }
+    }
+
+    /// Re-evaluate each chip's `IsActive` and `IsHead` flags against the
+    /// current recall index and collection position. O(N) — N is always small.
+    /// Short-circuits when the recall index hasn't moved AND the collection
+    /// count matches what we last saw, so redundant fires are cheap.
+    private int _lastRefreshedActiveIndex = int.MinValue;
+    private int _lastRefreshedCount = -1;
+    private string? _lastRefreshedHeadId;
+    private void RefreshQueueActiveFlags()
+    {
+        int active = _chatRecallIndex;
+        int count = QueuedMessages.Count;
+        // Include head chip identity in the short-circuit key. Count-and-index
+        // alone miss Move events that shuffle the order without changing the
+        // count — the previous head would otherwise stay marked IsHead=true
+        // even after the user reorders chips with the new up/down buttons.
+        string? headId = count > 0 ? QueuedMessages[0].Id : null;
+        if (active == _lastRefreshedActiveIndex
+            && count == _lastRefreshedCount
+            && ReferenceEquals(headId, _lastRefreshedHeadId)) return;
+        _lastRefreshedActiveIndex = active;
+        _lastRefreshedCount = count;
+        _lastRefreshedHeadId = headId;
+        // Head pill only renders when there are ≥2 chips — with one chip
+        // the dequeue order is already obvious.
+        bool showHead = count >= 2;
+        int lastIdx = count - 1;
+        for (int i = 0; i < count; i++)
+        {
+            var m = QueuedMessages[i];
+            bool shouldBeActive = (i == active);
+            bool shouldBeHead = showHead && i == 0;
+            if (m.IsActive != shouldBeActive) m.IsActive = shouldBeActive;
+            if (m.IsHead != shouldBeHead) m.IsHead = shouldBeHead;
+            if (m.IsFirst != (i == 0)) m.IsFirst = (i == 0);
+            if (m.IsLast != (i == lastIdx)) m.IsLast = (i == lastIdx);
+        }
+    }
+
+    private void QueuedMessage_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(QueuedChatMessage.Text))
+        {
+            InvalidateQueueHeader();
+            OnChanged(nameof(QueueHeaderLabel));
+        }
     }
     public bool IsRecallingQueued => _chatRecallIndex >= 0;
 
@@ -556,8 +885,34 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
                 QueuedMessages[_chatRecallIndex].Text = value;
             }
             OnChanged();
+            OnChangedMany(
+                nameof(ChatInputStatsLabel),
+                nameof(HasChatInputStats),
+                nameof(PrimaryActionText),
+                nameof(IsPrimaryActionStart));
         }
     }
+
+    /// Subtle word/char readout rendered above the chat input. Empty when
+    /// the box is empty so the UI stays quiet until the user has typed.
+    /// Cached because WPF may read the binding multiple times between
+    /// keystrokes (once for the TextBlock, once for the Visibility trigger).
+    private string _chatInputStatsCache = "";
+    private string _chatInputStatsSource = "";
+    public string ChatInputStatsLabel
+    {
+        get
+        {
+            var src = _chatInput ?? "";
+            if (!ReferenceEquals(src, _chatInputStatsSource) && src != _chatInputStatsSource)
+            {
+                _chatInputStatsSource = src;
+                _chatInputStatsCache = TextStats.FormatLabel(src);
+            }
+            return _chatInputStatsCache;
+        }
+    }
+    public bool HasChatInputStats => !string.IsNullOrEmpty(_chatInput);
 
     public void EnqueueChat()
     {
@@ -577,7 +932,6 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         }
         QueuedMessages.Add(new QueuedChatMessage(t));
         ChatInput = "";
-        OnChanged(nameof(HasQueuedMessages));
         if (!IsRunning) _ = StartRunAsync(chatOnly: true);
     }
 
@@ -589,7 +943,84 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         QueuedMessages.RemoveAt(idx);
         if (_chatRecallIndex == idx) ExitRecallMode();
         else if (_chatRecallIndex > idx) ChatRecallIndex = _chatRecallIndex - 1;
-        OnChanged(nameof(HasQueuedMessages));
+    }
+
+    /// Load a queued message into the chat input for in-place editing.
+    /// Mirrors what Up/Down recall does but lets the UI trigger it by click.
+    /// No-op if the message is no longer in the queue (it may have been
+    /// dequeued by the loop runner between the mouse-down and this call).
+    public void BeginEditQueued(QueuedChatMessage msg)
+    {
+        if (msg == null) return;
+        int idx = QueuedMessages.IndexOf(msg);
+        if (idx < 0) return;
+        if (_chatRecallIndex < 0) _chatDraftSaved = _chatInput ?? "";
+        ChatRecallIndex = idx;
+        SetChatInputFromRecall();
+    }
+
+    /// Clone an existing queued message and insert the copy immediately after
+    /// it. Handy for small variations ("the same thing but for file X"). The
+    /// new chip becomes the active recall target so the user can edit in place.
+    public void DuplicateQueued(QueuedChatMessage msg)
+    {
+        if (msg == null) return;
+        int idx = QueuedMessages.IndexOf(msg);
+        if (idx < 0) return;
+        var copy = new QueuedChatMessage(msg.Text ?? "");
+        QueuedMessages.Insert(idx + 1, copy);
+        // Push recall cursor past the duplicate so live-edits in the chat box
+        // don't accidentally re-write the original.
+        if (_chatRecallIndex == idx) ChatRecallIndex = idx + 1;
+    }
+
+    /// Shift a queued chip one slot earlier in the dequeue order. The chip at
+    /// index 0 is the next to run, so "up" means "closer to the front". Keeps
+    /// the recall cursor pinned to the same logical chip so in-progress edits
+    /// don't jump to a different message.
+    public void MoveQueuedUp(QueuedChatMessage msg) => MoveQueued(msg, -1);
+
+    /// Shift a queued chip one slot later in the dequeue order. No-op when
+    /// the chip is already at the tail.
+    public void MoveQueuedDown(QueuedChatMessage msg) => MoveQueued(msg, +1);
+
+    /// Reorder whichever chip the recall cursor is pointing at. Keyboard
+    /// shortcut entry point (Alt+Up / Alt+Down from the chat input) — lets
+    /// the user reorder a chip they're currently editing without taking
+    /// their hands off the keyboard. Returns true when something moved so
+    /// the key handler can e.Handled=true only on success.
+    public bool MoveRecalledQueued(int delta)
+    {
+        if (_chatRecallIndex < 0) return false;
+        if ((uint)_chatRecallIndex >= (uint)QueuedMessages.Count) return false;
+        int before = _chatRecallIndex;
+        MoveQueued(QueuedMessages[_chatRecallIndex], delta);
+        return _chatRecallIndex != before;
+    }
+
+    private void MoveQueued(QueuedChatMessage msg, int delta)
+    {
+        if (msg == null) return;
+        int idx = QueuedMessages.IndexOf(msg);
+        if (idx < 0) return;
+        int target = idx + delta;
+        if ((uint)target >= (uint)QueuedMessages.Count) return;
+        QueuedMessages.Move(idx, target);
+        // The recall cursor follows whichever chip physically moved into the
+        // slot it was watching — that's `idx` for the displaced chip, `target`
+        // for the moved chip. Any other index is unaffected.
+        if (_chatRecallIndex == idx) ChatRecallIndex = target;
+        else if (_chatRecallIndex == target) ChatRecallIndex = idx;
+    }
+
+    /// Drop every queued message in one shot. Fires CollectionChanged=Reset
+    /// exactly once (ObservableCollection.Clear semantics), so the UI does a
+    /// single rebind rather than N per-item removals.
+    public void ClearQueue()
+    {
+        if (QueuedMessages.Count == 0) return;
+        if (_chatRecallIndex >= 0) ExitRecallMode();
+        QueuedMessages.Clear();
     }
 
     /// Step the recall cursor toward older queued items. Entering recall
@@ -639,7 +1070,6 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
             string.IsNullOrWhiteSpace(QueuedMessages[idx].Text))
         {
             QueuedMessages.RemoveAt(idx);
-            OnChanged(nameof(HasQueuedMessages));
         }
     }
 
@@ -671,7 +1101,6 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
             QueuedMessages.RemoveAt(0);
             if (_chatRecallIndex == 0) ExitRecallMode();
             else if (_chatRecallIndex > 0) ChatRecallIndex = _chatRecallIndex - 1;
-            OnChanged(nameof(HasQueuedMessages));
             if (string.IsNullOrWhiteSpace(head.Text)) continue;
 
             var expanded = ExpandPromptForSubmission(head.Text);
@@ -727,23 +1156,32 @@ Hard rules for this turn:
     private long _estInputChars;
     private long _estOutputChars;
     private DateTime _lastTokenNotify = DateTime.MinValue;
+    private readonly DispatcherTimer _taskPreviewDebounce;
+    private string _lastProjectedTasksSource = "";
+    private TaskViewFilter _lastProjectedFilter = TaskViewFilter.All;
+    private bool _hasProjectedTasks;
 
-    // ≈ 3.7 chars per token is a reasonable English approximation.
-    private static long CharsToTokens(long chars) =>
-        chars <= 0 ? 0 : Math.Max(1L, (long)(chars / 3.7));
-
-    public string TokenSummary
+    // Cached so the binding (read by Text + Visibility triggers) doesn't
+    // rebuild a 3-segment string on every read. Dirty-flag invalidation
+    // via DirtyMemo; callers invoke InvalidateTokenSummary() whenever any
+    // of the four inputs changes (token counters or char-estimate sinks).
+    private DirtyMemo<string> _tokenSummary = DirtyMemo<string>.Empty();
+    private void InvalidateTokenSummary()
     {
-        get
-        {
-            long inDisplay = _inputTokens + CharsToTokens(_estInputChars);
-            long outDisplay = _outputTokens + CharsToTokens(_estOutputChars);
-            if (inDisplay == 0 && outDisplay == 0) return "";
-            var s = $"{inDisplay:N0} in · {outDisplay:N0} out";
-            if (_cachedTokens > 0) s += $" · {_cachedTokens:N0} cached";
-            if (_estInputChars > 0 || _estOutputChars > 0) s += " · est";
-            return s;
-        }
+        _tokenSummary.Invalidate();
+        OnChanged(nameof(TokenSummary));
+    }
+    public string TokenSummary => _tokenSummary.Read(ComputeTokenSummary);
+    private string ComputeTokenSummary()
+    {
+        long inDisplay = _inputTokens + TextStats.ApproxTokens(_estInputChars);
+        long outDisplay = _outputTokens + TextStats.ApproxTokens(_estOutputChars);
+        bool hasEst = _estInputChars > 0 || _estOutputChars > 0;
+        if (inDisplay == 0 && outDisplay == 0) return "";
+        var s = $"{inDisplay:N0} in · {outDisplay:N0} out";
+        if (_cachedTokens > 0) s += $" · {_cachedTokens:N0} cached";
+        if (hasEst) s += " · est";
+        return s;
     }
 
     public ConversationViewModel(string workingDirectory, ConversationSettings settings, Action persistSettings)
@@ -751,10 +1189,32 @@ Hard rules for this turn:
         _workingDirectory = workingDirectory;
         _settings = settings;
         _persistSettings = persistSettings;
+        QueuedMessages.CollectionChanged += (_, e) =>
+        {
+            // Swap per-item text subscriptions so the header's token total
+            // reflects in-place edits (click-to-edit / recall typing), not
+            // just add/remove/reset events.
+            if (e.OldItems != null)
+                foreach (QueuedChatMessage m in e.OldItems) m.PropertyChanged -= QueuedMessage_PropertyChanged;
+            if (e.NewItems != null)
+                foreach (QueuedChatMessage m in e.NewItems) m.PropertyChanged += QueuedMessage_PropertyChanged;
+            if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset)
+                foreach (var m in QueuedMessages) m.PropertyChanged += QueuedMessage_PropertyChanged;
+
+            InvalidateQueueHeader();
+            OnChangedMany(
+                nameof(HasQueuedMessages),
+                nameof(QueuedCount),
+                nameof(CanClearQueue),
+                nameof(QueueHeaderLabel),
+                nameof(PrimaryActionText),
+                nameof(IsPrimaryActionStart));
+            RefreshQueueActiveFlags();
+        };
         // Expire stale session ids on load so we never try to resume into a
         // context the model has likely forgotten.
-        if (settings.LastSessionTimestamp is { } ts &&
-            DateTime.UtcNow - ts > SessionTTL)
+        if (!string.IsNullOrEmpty(settings.LastSessionId)
+            && IsSessionStampExpired(settings.LastSessionTimestamp))
         {
             settings.LastSessionId = null;
             settings.LastSessionTimestamp = null;
@@ -763,6 +1223,18 @@ Hard rules for this turn:
 
         ConsoleParagraph = new Paragraph { Margin = new Thickness(0), TextIndent = 0 };
         ConsoleDocument = new FlowDocument(ConsoleParagraph)
+        {
+            PageWidth = 6000,
+            Background = System.Windows.Media.Brushes.Transparent,
+        };
+        ConversationConsoleParagraph = new Paragraph { Margin = new Thickness(0), TextIndent = 0 };
+        ConversationConsoleDocument = new FlowDocument(ConversationConsoleParagraph)
+        {
+            PageWidth = 6000,
+            Background = System.Windows.Media.Brushes.Transparent,
+        };
+        ToolConsoleParagraph = new Paragraph { Margin = new Thickness(0), TextIndent = 0 };
+        ToolConsoleDocument = new FlowDocument(ToolConsoleParagraph)
         {
             PageWidth = 6000,
             Background = System.Windows.Media.Brushes.Transparent,
@@ -782,16 +1254,18 @@ Hard rules for this turn:
             _tasksSaveDebounce.Stop();
             _tasksFile.Save(_tasksText);
         };
+        _taskPreviewDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
+        _taskPreviewDebounce.Tick += (_, _) =>
+        {
+            _taskPreviewDebounce.Stop();
+            RefreshTaskProjectionNow();
+        };
 
         _tasksFile.ExternalChange += (_, text) =>
             Application.Current?.Dispatcher.BeginInvoke(() => ApplyExternalTasks(text));
 
         _uiTick = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-        _uiTick.Tick += (_, _) =>
-        {
-            OnChanged(nameof(IterationElapsedText));
-            OnChanged(nameof(TotalElapsedText));
-        };
+        _uiTick.Tick += (_, _) => RefreshElapsedCaches();
 
         _loopRunner = new LoopRunner(new CliProcessRunner());
         _loopRunner.Output += (_, chunk) =>
@@ -807,15 +1281,14 @@ Hard rules for this turn:
             if (!IsRunning)
             {
                 _uiTick.Stop();
-                OnChanged(nameof(IterationElapsedText));
-                OnChanged(nameof(TotalElapsedText));
+                RefreshElapsedCaches();
             }
         });
         _loopRunner.IterationChanged += (_, t) => Application.Current?.Dispatcher.BeginInvoke(() =>
         {
             CurrentIteration = t.current;
             _iterStartUtc = DateTime.UtcNow;
-            OnChanged(nameof(IterationElapsedText));
+            RefreshElapsedCaches();
         });
         _loopRunner.PromptInjected += (_, p) => Application.Current?.Dispatcher.BeginInvoke(() =>
         {
@@ -871,8 +1344,7 @@ Hard rules for this turn:
         });
         _loopRunner.TaskStatsUpdated += (_, t) => Application.Current?.Dispatcher.BeginInvoke(() =>
         {
-            OpenTasks = t.open;
-            ClosedTasks = t.closed;
+            ApplyTaskCounts(t.open, t.closed);
         });
         _loopRunner.TokenUsageReported += (_, u) => Application.Current?.Dispatcher.BeginInvoke(() =>
         {
@@ -883,7 +1355,7 @@ Hard rules for this turn:
             CachedTokens += u.cached;
             _estInputChars = 0;
             _estOutputChars = 0;
-            OnChanged(nameof(TokenSummary));
+            InvalidateTokenSummary();
         });
         _loopRunner.EstimatedInputCharsSet += (_, n) => Application.Current?.Dispatcher.BeginInvoke(() =>
         {
@@ -891,7 +1363,7 @@ Hard rules for this turn:
             // this iteration's input payload.
             _estInputChars = n;
             _estOutputChars = 0;
-            OnChanged(nameof(TokenSummary));
+            InvalidateTokenSummary();
         });
         _loopRunner.EstimatedOutputCharsAppended += (_, n) =>
         {
@@ -903,7 +1375,7 @@ Hard rules for this turn:
                 if ((now - _lastTokenNotify).TotalMilliseconds >= 120)
                 {
                     _lastTokenNotify = now;
-                    OnChanged(nameof(TokenSummary));
+                    InvalidateTokenSummary();
                 }
             });
         };
@@ -914,6 +1386,7 @@ Hard rules for this turn:
         _promptStore.Watch();
         _tasksFile.Watch(TasksFile);
         _tasksText = _tasksFile.Load();
+        QueueTaskProjectionRefresh(immediate: true);
         // Skills discovery is deferred to first popup open. The in-process
         // cache in SkillsService makes repeat access cheap, so running it
         // N times (once per conversation) at project open was pure waste.
@@ -941,6 +1414,54 @@ Hard rules for this turn:
         _suppressTasksSave = true;
         try { TasksText = text; }
         finally { _suppressTasksSave = false; }
+    }
+
+    private void ApplyTaskCounts(int open, int closed)
+    {
+        OpenTasks = open;
+        ClosedTasks = closed;
+    }
+
+    private void SetTaskPreviewFilter(TaskViewFilter filter)
+    {
+        if (_taskPreviewFilter == filter) return;
+        _taskPreviewFilter = filter;
+        OnChanged(nameof(ShowAllTaskPreview));
+        OnChanged(nameof(ShowOpenTaskPreview));
+        OnChanged(nameof(ShowDoneTaskPreview));
+        OnChanged(nameof(ShowSummaryTaskPreview));
+        OnChanged(nameof(ShowLatestSummaryTaskPreview));
+        OnChanged(nameof(TaskPreviewFilterLabel));
+        QueueTaskProjectionRefresh(immediate: true);
+    }
+
+    private void QueueTaskProjectionRefresh(bool immediate = false)
+    {
+        if (immediate)
+        {
+            _taskPreviewDebounce.Stop();
+            RefreshTaskProjectionNow();
+            return;
+        }
+
+        _taskPreviewDebounce.Stop();
+        _taskPreviewDebounce.Start();
+    }
+
+    private void RefreshTaskProjectionNow()
+    {
+        if (_hasProjectedTasks &&
+            _lastProjectedFilter == _taskPreviewFilter &&
+            string.Equals(_lastProjectedTasksSource, _tasksText, StringComparison.Ordinal))
+            return;
+
+        var projection = TasksMarkdownAnalyzer.CreateProjection(_tasksText, _taskPreviewFilter);
+        _hasProjectedTasks = true;
+        _lastProjectedTasksSource = _tasksText;
+        _lastProjectedFilter = _taskPreviewFilter;
+        ApplyTaskCounts(projection.Stats.Open, projection.Stats.Closed);
+        SummaryCount = projection.Stats.SummaryCount;
+        TaskPreviewMarkdown = projection.Content;
     }
 
     public Task ToggleStartStopAsync()
@@ -990,15 +1511,14 @@ Hard rules for this turn:
         ExitStatus = null;
         _estInputChars = 0;
         _estOutputChars = 0;
-        OnChanged(nameof(TokenSummary));
+        InvalidateTokenSummary();
         IsRunning = true;
         Status = "Running";
         CurrentIteration = 0;
         _totalStartUtc = DateTime.UtcNow;
         _iterStartUtc = DateTime.UtcNow;
         _uiTick.Start();
-        OnChanged(nameof(TotalElapsedText));
-        OnChanged(nameof(IterationElapsedText));
+        RefreshElapsedCaches();
         OnChanged(nameof(IterationLabel));
         try
         {
@@ -1019,8 +1539,7 @@ Hard rules for this turn:
             _uiTick.Stop();
             _promptAtLastInjection = null;
             PromptPendingChange = false;
-            OnChanged(nameof(TotalElapsedText));
-            OnChanged(nameof(IterationElapsedText));
+            RefreshElapsedCaches();
         }
     }
 
@@ -1033,8 +1552,74 @@ Hard rules for this turn:
     {
         CurrentSessionId = null;
         _consoleLog.Clear();
+        ClearConsoleViews();
         PinnedText = "";
         PinnedIsThinking = false;
+    }
+
+    public void RecordConsoleLineCounts(int allDelta, int conversationDelta, int toolDelta)
+    {
+        if (allDelta != 0) AllConsoleLineCount += allDelta;
+        if (conversationDelta != 0) ConversationConsoleLineCount += conversationDelta;
+        if (toolDelta != 0) ToolConsoleLineCount += toolDelta;
+    }
+
+    public void ClearConsoleViews()
+    {
+        ConsoleParagraph.Inlines.Clear();
+        ConversationConsoleParagraph.Inlines.Clear();
+        ToolConsoleParagraph.Inlines.Clear();
+        AllConsoleLineCount = 0;
+        ConversationConsoleLineCount = 0;
+        ToolConsoleLineCount = 0;
+        ResetConversationLineState();
+    }
+
+    // ---------- conversation-view line filter ----------
+    // The conversation paragraph hides tool-use lines, which leaves the model's
+    // own thinking/text blocks looking *adjacent* even when there was a tool
+    // call between them. Without this filter, every thinking block re-prints
+    // its "🧠 thinking…" header and each block contributes leading/trailing
+    // newlines, so two thoughts separated by a hidden tool call render as a
+    // tall pile of empty rows. We track the most-recently-appended kind and
+    // buffer blank lines so we can collapse them and drop redundant headers.
+    private bool _conversationLastWasThinking;
+    private int _conversationBlankBuffer;
+
+    public enum ConversationLineDecision { Skip, AppendBlankThenLine, AppendLineOnly }
+
+    public void ResetConversationLineState()
+    {
+        _conversationLastWasThinking = false;
+        _conversationBlankBuffer = 0;
+    }
+
+    public ConversationLineDecision RouteConversationLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            _conversationBlankBuffer++;
+            return ConversationLineDecision.Skip;
+        }
+        var trimmed = line.Length > 0 && line[^1] == '\n'
+            ? line.Substring(0, line.Length - 1)
+            : line;
+        bool isHeader = trimmed.StartsWith("🧠 thinking", StringComparison.Ordinal);
+        bool isGutter = trimmed.StartsWith("│ ", StringComparison.Ordinal) || trimmed == "│";
+        if (isHeader && _conversationLastWasThinking)
+        {
+            // Drop the duplicate header *and* any blank lines that would have
+            // padded it — the prior thinking gutter line continues straight
+            // into the next one with no visual seam.
+            _conversationBlankBuffer = 0;
+            return ConversationLineDecision.Skip;
+        }
+        bool needBlank = _conversationBlankBuffer > 0;
+        _conversationBlankBuffer = 0;
+        _conversationLastWasThinking = isHeader || isGutter;
+        return needBlank
+            ? ConversationLineDecision.AppendBlankThenLine
+            : ConversationLineDecision.AppendLineOnly;
     }
 
     /// Called once by the view after it has attached to the ConsoleAppend
@@ -1114,6 +1699,7 @@ Hard rules for this turn:
             _tasksSaveDebounce.Stop();
             _tasksFile.Save(_tasksText);
         }
+        _taskPreviewDebounce.Stop();
         _tasksFile.Dispose();
         _promptStore.Dispose();
         _consoleLog.Dispose();
@@ -1148,16 +1734,16 @@ Hard rules for this turn:
         }
     }
 
-    private static string FormatElapsed(DateTime? startUtc)
-    {
-        if (startUtc is null) return "--:--";
-        var t = DateTime.UtcNow - startUtc.Value;
-        if (t < TimeSpan.Zero) t = TimeSpan.Zero;
-        return t.TotalHours >= 1
-            ? $"{(int)t.TotalHours}:{t.Minutes:D2}:{t.Seconds:D2}"
-            : $"{t.Minutes:D2}:{t.Seconds:D2}";
-    }
-
     private void OnChanged([CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+
+    /// Batch-fire PropertyChanged for several property names in one call.
+    /// Shaves off the repeated `OnChanged(nameof(...))` boilerplate where a
+    /// setter or event handler touches multiple derived properties at once.
+    private void OnChangedMany(params string[] names)
+    {
+        if (PropertyChanged is null) return;
+        for (int i = 0; i < names.Length; i++)
+            PropertyChanged.Invoke(this, new PropertyChangedEventArgs(names[i]));
+    }
 }

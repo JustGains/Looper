@@ -1,10 +1,12 @@
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using JustCode.Services;
@@ -15,12 +17,17 @@ namespace JustCode;
 
 public partial class MainWindow : Window
 {
+    /// Window-scoped RoutedCommand for Ctrl+Shift+K. Wired in the Window
+    /// constructor to invoke ClearQueue on the active conversation.
+    public static readonly RoutedCommand ClearQueueCommand = new("ClearQueue", typeof(MainWindow));
+
     private readonly MainViewModel _vm;
     private ProjectViewModel? _subscribedProject;
+    private ConversationViewModel? _subscribedConversation;
     private System.Windows.Threading.DispatcherTimer? _wordWrapTimer;
-
-    private static readonly Regex ToolHeaderLine = new(@"^▸\s.+?\(", RegexOptions.Compiled);
-    private static readonly Regex ToolResultLine = new(@"^⎿\s", RegexOptions.Compiled);
+    private TerminalHost? _terminalHost;
+    private bool _terminalHostReady;
+    private ProjectViewModel? _terminalAttachedProject;
 
     // @-mention state
     private readonly Dictionary<string, FileMentionIndex> _mentionIndexes = new(StringComparer.OrdinalIgnoreCase);
@@ -33,7 +40,14 @@ public partial class MainWindow : Window
         InitializeComponent();
         _vm = new MainViewModel();
         DataContext = _vm;
-
+        CommandBindings.Add(new CommandBinding(
+            ClearQueueCommand,
+            (_, _) => _vm.SelectedProject?.SelectedConversation?.ClearQueue(),
+            (_, e) =>
+            {
+                e.CanExecute = _vm.SelectedProject?.SelectedConversation?.HasQueuedMessages == true;
+                e.Handled = true;
+            }));
         RestoreWindowBounds();
 
         _vm.PropertyChanged += OnVmPropertyChanged;
@@ -43,16 +57,9 @@ public partial class MainWindow : Window
         // SizeChanged fires on every animation frame during a resize. Throttle
         // to a DispatcherTimer so we only recompute PageWidth once per burst
         // — otherwise FlowDocument re-layouts thrash the UI thread.
-        ConsoleBox.SizeChanged += (_, _) =>
-        {
-            if (_wordWrapTimer == null)
-            {
-                _wordWrapTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(60) };
-                _wordWrapTimer.Tick += (_, _) => { _wordWrapTimer!.Stop(); ApplyWordWrap(); };
-            }
-            _wordWrapTimer.Stop();
-            _wordWrapTimer.Start();
-        };
+        HookConsoleBoxSizeChanged(ConsoleAllBox);
+        HookConsoleBoxSizeChanged(ConsoleConversationBox);
+        HookConsoleBoxSizeChanged(ConsoleToolsBox);
 
         Loaded += (_, _) =>
         {
@@ -62,20 +69,27 @@ public partial class MainWindow : Window
             _vm.InitializeTabs(Directory.GetCurrentDirectory());
             foreach (var p in _vm.Projects) HookProject(p);
             SubscribeToSelectedProject();
-            AttachSelectedConversationDocument();
+            SubscribeToSelectedConversation();
+            AttachSelectedConversationDocuments();
             ApplyWordWrap();
             AttachMentionHighlightAdorner();
             UpdateActivityBarStyles();
+            _ = InitializeTerminalHostAsync();
         };
 
         Closing += (_, _) => _vm.SaveWindowBounds(Left, Top, Width, Height);
-        Closed += (_, _) => _vm.Shutdown();
+        Closed += (_, _) =>
+        {
+            try { _terminalHost?.Dispose(); } catch { }
+            _vm.Shutdown();
+        };
     }
 
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
         TryEnableImmersiveDarkMode();
+        TryPaintInitialDarkBackground();
     }
 
     // ---- hooking projects and their conversations ----
@@ -160,7 +174,7 @@ public partial class MainWindow : Window
         if (ReferenceEquals(c, _vm.SelectedProject?.SelectedConversation)
             && _vm.AutoScrollConsole)
         {
-            ConsoleBox.ScrollToEnd();
+            GetActiveConsoleBox()?.ScrollToEnd();
         }
     }
 
@@ -172,7 +186,8 @@ public partial class MainWindow : Window
         {
             CloseInlineGitDiff();
             SubscribeToSelectedProject();
-            AttachSelectedConversationDocument();
+            SubscribeToSelectedConversation();
+            AttachSelectedConversationDocuments();
             ApplyWordWrap();
             QueueScrollTasks();
             UpdateActivityBarStyles();
@@ -194,6 +209,7 @@ public partial class MainWindow : Window
         _subscribedProject = _vm.SelectedProject;
         if (_subscribedProject != null)
             _subscribedProject.PropertyChanged += OnProjectPropertyChanged;
+        AttachActiveProjectTerminal();
     }
 
     private void OnProjectPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -201,7 +217,8 @@ public partial class MainWindow : Window
         if (e.PropertyName == nameof(ProjectViewModel.SelectedConversation))
         {
             CloseInlineGitDiff();
-            AttachSelectedConversationDocument();
+            SubscribeToSelectedConversation();
+            AttachSelectedConversationDocuments();
             ApplyWordWrap();
             QueueScrollTasks();
             CloseMentionPopup();
@@ -209,16 +226,41 @@ public partial class MainWindow : Window
         }
     }
 
-    private void AttachSelectedConversationDocument()
+    private void SubscribeToSelectedConversation()
+    {
+        if (_subscribedConversation != null)
+            _subscribedConversation.PropertyChanged -= OnSelectedConversationPropertyChanged;
+        _subscribedConversation = _vm.SelectedProject?.SelectedConversation;
+        if (_subscribedConversation != null)
+            _subscribedConversation.PropertyChanged += OnSelectedConversationPropertyChanged;
+    }
+
+    private void OnSelectedConversationPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (!ReferenceEquals(sender, _subscribedConversation)) return;
+        if (e.PropertyName is nameof(ConversationViewModel.TasksText)
+            or nameof(ConversationViewModel.TaskPreviewMarkdown))
+        {
+            QueueScrollTasks();
+        }
+    }
+
+    private void AttachSelectedConversationDocuments()
     {
         var c = _vm.SelectedProject?.SelectedConversation;
         if (c == null)
         {
-            ConsoleBox.Document = new FlowDocument();
+            ConsoleAllBox.Document = new FlowDocument();
+            ConsoleConversationBox.Document = new FlowDocument();
+            ConsoleToolsBox.Document = new FlowDocument();
             return;
         }
-        if (!ReferenceEquals(ConsoleBox.Document, c.ConsoleDocument))
-            ConsoleBox.Document = c.ConsoleDocument;
+        if (!ReferenceEquals(ConsoleAllBox.Document, c.ConsoleDocument))
+            ConsoleAllBox.Document = c.ConsoleDocument;
+        if (!ReferenceEquals(ConsoleConversationBox.Document, c.ConversationConsoleDocument))
+            ConsoleConversationBox.Document = c.ConversationConsoleDocument;
+        if (!ReferenceEquals(ConsoleToolsBox.Document, c.ToolConsoleDocument))
+            ConsoleToolsBox.Document = c.ToolConsoleDocument;
     }
 
     private void QueueScrollTasks()
@@ -249,18 +291,203 @@ public partial class MainWindow : Window
 
     private void ApplyWordWrap()
     {
-        if (ConsoleBox?.Document == null) return;
+        ApplyWordWrap(ConsoleAllBox);
+        ApplyWordWrap(ConsoleConversationBox);
+        ApplyWordWrap(ConsoleToolsBox);
+    }
+
+    private void HookConsoleBoxSizeChanged(RichTextBox box)
+    {
+        box.SizeChanged += (_, _) =>
+        {
+            if (_wordWrapTimer == null)
+            {
+                _wordWrapTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(60) };
+                _wordWrapTimer.Tick += (_, _) => { _wordWrapTimer!.Stop(); ApplyWordWrap(); };
+            }
+            _wordWrapTimer.Stop();
+            _wordWrapTimer.Start();
+        };
+    }
+
+    private void ApplyWordWrap(RichTextBox box)
+    {
+        if (box?.Document == null) return;
         if (_vm.WordWrapConsole)
         {
-            var w = Math.Max(100, ConsoleBox.ViewportWidth - 8);
-            ConsoleBox.Document.PageWidth = w;
-            ConsoleBox.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            var w = Math.Max(100, box.ViewportWidth - 8);
+            box.Document.PageWidth = w;
+            box.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
         }
         else
         {
-            ConsoleBox.Document.PageWidth = 6000;
-            ConsoleBox.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+            box.Document.PageWidth = 6000;
+            box.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
         }
+    }
+
+    private RichTextBox? GetActiveConsoleBox()
+        => ConsoleTabs?.SelectedIndex switch
+        {
+            1 => ConsoleConversationBox,
+            2 => ConsoleToolsBox,
+            _ => ConsoleAllBox,
+        };
+
+    private void ConsoleTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded || sender is not TabControl) return;
+        ApplyWordWrap();
+        if (_vm.AutoScrollConsole)
+            GetActiveConsoleBox()?.ScrollToEnd();
+        if (ConsoleTabs.SelectedIndex == 3)
+        {
+            // First time the user opens the Terminal tab in this project,
+            // auto-spawn a session so they land in a usable shell instead of
+            // the empty-state screen.
+            var panel = ActiveTerminalPanel;
+            if (panel != null && !panel.HasAnySessions && _terminalHostReady)
+                panel.AddSession();
+            _terminalHost?.FocusActive();
+        }
+    }
+
+    // ---- terminal panel (xterm.js + ConPTY) ----
+
+    private async Task InitializeTerminalHostAsync()
+    {
+        if (_terminalHost != null) return;
+        _terminalHost = new TerminalHost(TerminalWebView);
+        try
+        {
+            await _terminalHost.InitializeAsync();
+            _terminalHostReady = true;
+            AttachActiveProjectTerminal();
+        }
+        catch
+        {
+            // WebView2 runtime not installed — fail quiet; user will see an
+            // empty Terminal tab. We could surface a message here in a follow-up.
+        }
+    }
+
+    private void AttachActiveProjectTerminal()
+    {
+        if (!_terminalHostReady || _terminalHost == null) return;
+        var project = _vm.SelectedProject;
+        if (ReferenceEquals(project, _terminalAttachedProject)) return;
+        _terminalAttachedProject = project;
+        _terminalHost.AttachPanel(project?.TerminalPanel);
+    }
+
+    private TerminalPanelViewModel? ActiveTerminalPanel =>
+        _vm.SelectedProject?.TerminalPanel;
+
+    private void TerminalAddSession_Click(object sender, RoutedEventArgs e)
+    {
+        ActiveTerminalPanel?.AddSession();
+        _terminalHost?.FocusActive();
+    }
+
+    private void TerminalPickShell_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn) return;
+        var panel = ActiveTerminalPanel;
+        if (panel == null) return;
+
+        var menu = new ContextMenu
+        {
+            PlacementTarget = btn,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+        };
+        var shells = ShellDetector.Available;
+        if (shells.Count == 0)
+        {
+            menu.Items.Add(new MenuItem { Header = "No shells detected", IsEnabled = false });
+        }
+        else
+        {
+            var defaultId = _vm.DefaultShellId;
+            foreach (var shell in shells)
+            {
+                var item = new MenuItem { Header = shell.Label, Tag = shell.Id };
+                item.Click += (_, _) => panel.AddSession(shell.Id);
+                menu.Items.Add(item);
+            }
+            menu.Items.Add(new Separator());
+            var header = new MenuItem
+            {
+                Header = "Default shell",
+                IsEnabled = false,
+                FontWeight = FontWeights.SemiBold,
+            };
+            menu.Items.Add(header);
+            foreach (var shell in shells)
+            {
+                var item = new MenuItem
+                {
+                    Header = shell.Label,
+                    IsCheckable = true,
+                    IsChecked = string.Equals(defaultId, shell.Id, StringComparison.OrdinalIgnoreCase)
+                                || (string.IsNullOrEmpty(defaultId) && ReferenceEquals(shell, shells[0])),
+                    StaysOpenOnClick = true,
+                };
+                item.Click += (_, _) => _vm.DefaultShellId = shell.Id;
+                menu.Items.Add(item);
+            }
+        }
+        menu.IsOpen = true;
+    }
+
+    private void TerminalClear_Click(object sender, RoutedEventArgs e)
+        => _terminalHost?.ClearActive();
+
+    private void TerminalCloseSession_Click(object sender, RoutedEventArgs e)
+    {
+        var panel = ActiveTerminalPanel;
+        if (panel?.ActiveSession != null) panel.CloseSession(panel.ActiveSession);
+    }
+
+    private void TerminalCloseTab_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: TerminalSessionViewModel s })
+            ActiveTerminalPanel?.CloseSession(s);
+        e.Handled = true;
+    }
+
+    private void TerminalTab_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.Tag is TerminalSessionViewModel s)
+        {
+            var panel = ActiveTerminalPanel;
+            if (panel != null) panel.ActiveSession = s;
+            _terminalHost?.FocusActive();
+        }
+    }
+
+    private void TerminalTab_Rename_RightClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.Tag is TerminalSessionViewModel s)
+        {
+            s.IsRenaming = true;
+            e.Handled = true;
+        }
+    }
+
+    private void TerminalTab_TitleEdit_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (sender is not TextBox tb) return;
+        if (e.Key == System.Windows.Input.Key.Enter || e.Key == System.Windows.Input.Key.Escape)
+        {
+            if (tb.Tag is TerminalSessionViewModel s) s.IsRenaming = false;
+            e.Handled = true;
+        }
+    }
+
+    private void TerminalTab_TitleEdit_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox tb && tb.Tag is TerminalSessionViewModel s)
+            s.IsRenaming = false;
     }
 
     private void RestoreWindowBounds()
@@ -294,19 +521,55 @@ public partial class MainWindow : Window
         return true;
     }
 
-    /// Cap on live `Run` inlines in the console FlowDocument. After a long
-    /// session this grows without bound and WPF text layout cost is roughly
-    /// linear in the number of inlines — keystroke latency creeps up once
-    /// the doc passes ~10k runs. We drop the oldest half whenever we cross
-    /// the limit, which keeps the console feeling responsive forever while
-    /// preserving the tail the user actually cares about.
-    private const int MaxConsoleInlines = 8000;
-    private const int TrimToConsoleInlines = 4000;
-
     private void AppendStyled(ConversationViewModel c, string chunk)
     {
-        var inlines = c.ConsoleParagraph.Inlines;
-        foreach (var (text, rule) in Tokenize(ApplyCollapse(chunk)))
+        int allLines = 0, conversationLines = 0, toolLines = 0;
+        foreach (var line in SplitConsoleLines(ApplyCollapse(chunk)))
+        {
+            var cls = ConsoleLineClassifier.Classify(line);
+            AppendStyledToParagraph(c.ConsoleParagraph, line);
+            if (cls.IsCounted) allLines++;
+            if (cls.IsTool)
+            {
+                AppendStyledToParagraph(c.ToolConsoleParagraph, line);
+                if (cls.IsCounted) toolLines++;
+            }
+            else
+            {
+                var decision = c.RouteConversationLine(line);
+                if (decision == ConversationViewModel.ConversationLineDecision.AppendBlankThenLine)
+                    AppendStyledToParagraph(c.ConversationConsoleParagraph, "\n");
+                if (decision != ConversationViewModel.ConversationLineDecision.Skip)
+                {
+                    AppendStyledToParagraph(c.ConversationConsoleParagraph, line);
+                    if (cls.IsCounted) conversationLines++;
+                }
+            }
+        }
+        c.RecordConsoleLineCounts(allLines, conversationLines, toolLines);
+    }
+
+    private static IEnumerable<string> SplitConsoleLines(string chunk)
+    {
+        int i = 0;
+        while (i < chunk.Length)
+        {
+            var nl = chunk.IndexOf('\n', i);
+            if (nl < 0)
+            {
+                yield return chunk.Substring(i);
+                yield break;
+            }
+
+            yield return chunk.Substring(i, nl - i + 1);
+            i = nl + 1;
+        }
+    }
+
+    private void AppendStyledToParagraph(Paragraph paragraph, string chunk)
+    {
+        var inlines = paragraph.Inlines;
+        foreach (var (text, rule) in Tokenize(chunk))
         {
             var run = new Run(text);
             if (rule?.ForegroundBrush is not null) run.Foreground = rule.ForegroundBrush;
@@ -316,22 +579,7 @@ public partial class MainWindow : Window
             if (rule?.Underline == true) run.TextDecorations = TextDecorations.Underline;
             inlines.Add(run);
         }
-        if (inlines.Count > MaxConsoleInlines) TrimInlines(inlines);
-    }
-
-    private static void TrimInlines(System.Windows.Documents.InlineCollection inlines)
-    {
-        // Drop the oldest runs until we're back under TrimToConsoleInlines.
-        // Done in a batch rather than per-append to avoid pathological O(N²)
-        // behaviour when bursting past the threshold.
-        int toRemove = inlines.Count - TrimToConsoleInlines;
-        var first = inlines.FirstInline;
-        while (toRemove-- > 0 && first != null)
-        {
-            var next = first.NextInline;
-            inlines.Remove(first);
-            first = next;
-        }
+        FlowDocumentInlineLimiter.Apply(inlines);
     }
 
     private string ApplyCollapse(string chunk)
@@ -347,20 +595,21 @@ public partial class MainWindow : Window
             var line = chunk.Substring(i, segEnd - i);
             i = segEnd;
 
-            var trimmed = line.TrimEnd('\n');
-            if (ToolResultLine.IsMatch(trimmed))
+            var cls = ConsoleLineClassifier.Classify(line);
+            bool hasNewline = line.Length > 0 && line[^1] == '\n';
+            if (cls.IsToolResult)
             {
                 sb.Append("⎿ …");
-                if (line.EndsWith('\n')) sb.Append('\n');
+                if (hasNewline) sb.Append('\n');
             }
-            else if (ToolHeaderLine.IsMatch(trimmed))
+            else if (cls.IsToolHeader)
             {
-                var open = trimmed.IndexOf('(');
+                var open = cls.Trimmed.IndexOf('(');
                 if (open > 0)
-                    sb.Append(trimmed.Substring(0, open + 1)).Append('…').Append(')');
+                    sb.Append(cls.Trimmed, 0, open + 1).Append('…').Append(')');
                 else
-                    sb.Append(trimmed);
-                if (line.EndsWith('\n')) sb.Append('\n');
+                    sb.Append(cls.Trimmed);
+                if (hasNewline) sb.Append('\n');
             }
             else
             {
@@ -815,14 +1064,16 @@ public partial class MainWindow : Window
     private void AddProject_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button btn) return;
+        var menu = BuildProjectMenu(btn);
+        menu.IsOpen = true;
+    }
 
-        var openPaths = new HashSet<string>(
-            _vm.Projects.Select(p => p.WorkingDirectory),
-            StringComparer.OrdinalIgnoreCase);
-        var recents = _vm.RecentWorkingDirectories
-            .Where(d => !openPaths.Contains(d))
-            .Take(8)
-            .ToList();
+    private ContextMenu BuildProjectMenu(Button btn)
+    {
+        var entries = _vm.GetRecentWorkspaceEntries();
+        var open = entries.Where(e => e.IsOpen).ToList();
+        var recent = entries.Where(e => !e.IsOpen && !e.IsMissing).Take(8).ToList();
+        var missing = entries.Where(e => !e.IsOpen && e.IsMissing).ToList();
 
         var menu = new ContextMenu
         {
@@ -831,38 +1082,99 @@ public partial class MainWindow : Window
             HasDropShadow = true,
         };
 
-        foreach (var path in recents)
+        if (open.Count > 0)
         {
-            var leaf = Path.GetFileName(path.TrimEnd('\\', '/'));
-            if (string.IsNullOrEmpty(leaf)) leaf = path;
-            var item = new MenuItem
-            {
-                Tag = path,
-                Header = new StackPanel
-                {
-                    Orientation = Orientation.Vertical,
-                    Children =
-                    {
-                        new TextBlock { Text = leaf, FontWeight = FontWeights.SemiBold },
-                        new TextBlock { Text = path, Opacity = 0.6, FontSize = 10 },
-                    },
-                },
-            };
-            item.Click += (_, _) =>
-            {
-                if (item.Tag is string p) _vm.AddProject(p);
-            };
-            menu.Items.Add(item);
+            AppendProjectMenuSection(menu, $"Open workspaces ({open.Count})");
+            foreach (var entry in open)
+                menu.Items.Add(BuildWorkspaceMenuItem(entry, markMissing: false));
         }
 
-        if (recents.Count > 0)
+        if (recent.Count > 0)
+        {
+            if (menu.Items.Count > 0) menu.Items.Add(new Separator());
+            AppendProjectMenuSection(menu, $"Recent workspaces ({recent.Count})");
+            foreach (var entry in recent)
+                menu.Items.Add(BuildWorkspaceMenuItem(entry, markMissing: false));
+        }
+
+        if (missing.Count > 0)
+        {
+            if (menu.Items.Count > 0) menu.Items.Add(new Separator());
+            AppendProjectMenuSection(menu, $"Missing paths ({missing.Count})");
+            foreach (var entry in missing)
+                menu.Items.Add(BuildWorkspaceMenuItem(entry, markMissing: true));
+
+            var forgetAll = new MenuItem { Header = $"Forget all missing ({missing.Count})" };
+            forgetAll.Click += (_, _) => _vm.RemoveMissingRecentWorkspaces();
+            menu.Items.Add(forgetAll);
+        }
+
+        if (menu.Items.Count > 0)
             menu.Items.Add(new Separator());
 
         var openNew = new MenuItem { Header = "Open new workspace…" };
         openNew.Click += (_, _) => OpenFolderPickerAndAdd();
         menu.Items.Add(openNew);
 
-        menu.IsOpen = true;
+        return menu;
+    }
+
+    private static void AppendProjectMenuSection(ContextMenu menu, string title)
+    {
+        menu.Items.Add(new MenuItem
+        {
+            Header = title,
+            IsEnabled = false,
+            FontSize = 10,
+            FontWeight = FontWeights.SemiBold,
+            Opacity = 0.75,
+        });
+    }
+
+    private MenuItem BuildWorkspaceMenuItem(MainViewModel.RecentWorkspaceEntry entry, bool markMissing)
+    {
+        var header = new StackPanel
+        {
+            Orientation = Orientation.Vertical,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = entry.IsSelected ? $"{entry.DisplayName} (current)" : entry.DisplayName,
+                    FontWeight = FontWeights.SemiBold,
+                },
+                new TextBlock
+                {
+                    Text = entry.Path,
+                    Opacity = 0.6,
+                    FontSize = 10,
+                },
+            },
+        };
+
+        if (!markMissing)
+        {
+            var item = new MenuItem { Tag = entry.Path, Header = header };
+            item.Click += (_, _) =>
+            {
+                if (item.Tag is string path) _vm.AddProject(path);
+            };
+            return item;
+        }
+
+        var missing = new MenuItem { Tag = entry.Path, Header = header };
+        missing.Items.Add(new MenuItem
+        {
+            Header = "Forget missing path",
+        });
+        if (missing.Items[0] is MenuItem forget)
+        {
+            forget.Click += (_, _) =>
+            {
+                if (missing.Tag is string path) _vm.RemoveRecentWorkspace(path);
+            };
+        }
+        return missing;
     }
 
     private void OpenFolderPickerAndAdd()
@@ -874,6 +1186,35 @@ public partial class MainWindow : Window
         };
         if (dlg.ShowDialog(this) == true)
             _vm.AddProject(dlg.FolderName);
+    }
+
+    private void TaskPreviewFilter_Checked(object sender, RoutedEventArgs e)
+    {
+        if (TasksTabs == null) return;
+        if (TasksTabs.SelectedIndex != 1)
+            TasksTabs.SelectedIndex = 1;
+        QueueScrollTasks();
+    }
+
+    private void ToolbarTerminal_Click(object sender, RoutedEventArgs e)
+    {
+        var projectDir = _vm.SelectedProject?.WorkingDirectory;
+        ShellPathActions.OpenTerminalHere(projectDir);
+        e.Handled = true;
+    }
+
+    private void PromptPath_Click(object sender, RoutedEventArgs e)
+    {
+        var promptFile = _vm.SelectedProject?.SelectedConversation?.PromptFile;
+        ShellPathActions.CopyPath(promptFile);
+        e.Handled = true;
+    }
+
+    private void TasksPath_Click(object sender, RoutedEventArgs e)
+    {
+        var tasksFile = _vm.SelectedProject?.SelectedConversation?.TasksFile;
+        ShellPathActions.CopyPath(tasksFile);
+        e.Handled = true;
     }
 
     // ---- inline rename of conversation ----
@@ -934,6 +1275,69 @@ public partial class MainWindow : Window
         _vm.SelectedProject?.AddConversation();
     }
 
+    private void ClearConversationFilter_Click(object sender, RoutedEventArgs e)
+    {
+        _vm.SelectedProject?.ClearConversationFilter();
+        ConversationFilterBox.Focus();
+    }
+
+    private void ConversationFilterBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Escape)
+        {
+            _vm.SelectedProject?.ClearConversationFilter();
+            e.Handled = true;
+        }
+        else if (e.Key == System.Windows.Input.Key.Down)
+        {
+            // Quality-of-life: Down arrow from the filter box drops focus
+            // into the (filtered) conversation list so the user can arrow
+            // through matches without reaching for the mouse.
+            ConversationList.Focus();
+            e.Handled = true;
+        }
+    }
+
+    private void ImportSession_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.SelectedProject == null) return;
+        ImportSessionInput.Text = "";
+        OpenPopupWithFocus(ImportSessionPopup, () =>
+        {
+            ImportSessionInput.Focus();
+            ImportSessionInput.SelectAll();
+        });
+    }
+
+    private void ImportSessionUse_Click(object sender, RoutedEventArgs e)
+    {
+        var sid = (ImportSessionInput.Text ?? "").Trim();
+        if (sid.Length == 0) return;
+        var project = _vm.SelectedProject;
+        if (project == null) return;
+        project.ImportConversationWithSession(sid);
+        ImportSessionPopup.IsOpen = false;
+    }
+
+    private void ImportSessionCancel_Click(object sender, RoutedEventArgs e)
+    {
+        ImportSessionPopup.IsOpen = false;
+    }
+
+    private void ImportSessionInput_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Enter)
+        {
+            ImportSessionUse_Click(sender, new RoutedEventArgs());
+            e.Handled = true;
+        }
+        else if (e.Key == System.Windows.Input.Key.Escape)
+        {
+            ImportSessionPopup.IsOpen = false;
+            e.Handled = true;
+        }
+    }
+
     private void RemoveConversation_Click(object sender, RoutedEventArgs e)
     {
         if (sender is Button b && b.Tag is ConversationViewModel c)
@@ -950,6 +1354,36 @@ public partial class MainWindow : Window
     /// each MenuItem.DataContext is the conversation the user right-clicked.
     private static ConversationViewModel? ResolveContextConv(object sender)
         => sender is MenuItem mi ? mi.DataContext as ConversationViewModel : null;
+
+    // ---- Recent-commit right-click context menu ----
+
+    /// Same DataContext-inheritance trick as the conversation row menu:
+    /// the commit Border's ContextMenu places each MenuItem inside the
+    /// commit's DataContext, so we can resolve the clicked GitCommit off
+    /// the sender's DataContext without tracking PlacementTarget manually.
+    private static Services.GitCommit? ResolveContextCommit(object sender)
+        => sender is MenuItem mi ? mi.DataContext as Services.GitCommit : null;
+
+    private void CopyCommitHash_Click(object sender, RoutedEventArgs e)
+    {
+        if (ResolveContextCommit(sender) is { } c) ShellPathActions.CopyText(c.Hash);
+    }
+
+    private void CopyCommitShortHash_Click(object sender, RoutedEventArgs e)
+    {
+        if (ResolveContextCommit(sender) is { } c) ShellPathActions.CopyText(c.ShortHash);
+    }
+
+    private void CopyCommitSubject_Click(object sender, RoutedEventArgs e)
+    {
+        if (ResolveContextCommit(sender) is { } c) ShellPathActions.CopyText(c.Subject);
+    }
+
+    private void CopyCommitHashSubject_Click(object sender, RoutedEventArgs e)
+    {
+        if (ResolveContextCommit(sender) is { } c)
+            ShellPathActions.CopyText($"{c.ShortHash} {c.Subject}");
+    }
 
     private void ForkConversation_Click(object sender, RoutedEventArgs e)
     {
@@ -991,8 +1425,23 @@ public partial class MainWindow : Window
     {
         var conv = _vm.SelectedProject?.SelectedConversation;
         if (conv == null) return;
-        conv.ConsoleParagraph.Inlines.Clear();
         conv.ClearSession();
+    }
+
+    private void CopyConsole_Click(object sender, RoutedEventArgs e)
+    {
+        var box = GetActiveConsoleBox();
+        var doc = box?.Document;
+        if (doc == null) return;
+        var range = new System.Windows.Documents.TextRange(doc.ContentStart, doc.ContentEnd);
+        Services.ShellPathActions.CopyText(range.Text);
+    }
+
+    private void CopyPinned_Click(object sender, RoutedEventArgs e)
+    {
+        var conv = _vm.SelectedProject?.SelectedConversation;
+        if (conv == null || !conv.HasPinnedText) return;
+        Services.ShellPathActions.CopyText(conv.PinnedText);
     }
 
     private void SessionPill_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
@@ -1000,16 +1449,8 @@ public partial class MainWindow : Window
         var conv = _vm.SelectedProject?.SelectedConversation;
         var id = conv?.CurrentSessionId;
         if (string.IsNullOrEmpty(id) || conv is null) return;
-        try
-        {
-            Clipboard.SetText(id);
-            conv.FlashSessionCopied();
-        }
-        catch
-        {
-            // Clipboard access can occasionally fail (another app owning it);
-            // swallow rather than surface an error for a cosmetic copy.
-        }
+        Services.ShellPathActions.CopyText(id);
+        conv.FlashSessionCopied();
         e.Handled = true;
     }
 
@@ -1029,12 +1470,11 @@ public partial class MainWindow : Window
         {
             _ = _vm.ModelPicker.RefreshFromCliAsync();
         }
-        ModelPopup.IsOpen = true;
-        Dispatcher.BeginInvoke(new Action(() =>
+        OpenPopupWithFocus(ModelPopup, () =>
         {
             ModelSearchBox.Focus();
             ModelSearchBox.SelectAll();
-        }), System.Windows.Threading.DispatcherPriority.Input);
+        });
     }
 
     private void ModelRefresh_Click(object sender, RoutedEventArgs e)
@@ -1099,6 +1539,34 @@ public partial class MainWindow : Window
     {
         ChatInputBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
         _vm.SelectedProject?.SelectedConversation?.EnqueueChat();
+    }
+
+    private async void ChatPrimary_Click(object sender, RoutedEventArgs e)
+    {
+        var c = _vm.SelectedProject?.SelectedConversation;
+        if (c == null) return;
+        ChatInputBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        if (c.IsPrimaryActionStart)
+        {
+            try { await c.ToggleStartStopAsync(); }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.ToString(), "JustCode error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            return;
+        }
+        c.EnqueueChat();
+    }
+
+    private async void ChatStop_Click(object sender, RoutedEventArgs e)
+    {
+        var c = _vm.SelectedProject?.SelectedConversation;
+        if (c == null || !c.IsRunning) return;
+        try { await c.ToggleStartStopAsync(); }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.ToString(), "JustCode error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void ChatInputBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -1170,6 +1638,23 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Alt+Up / Alt+Down reorder the chip that's currently loaded in
+        // recall — lets the user shuffle without taking their hands off the
+        // keyboard. Plain Alt so it doesn't clash with the Ctrl+Up/Down
+        // caret-word navigation baked into TextBox.
+        if (conv is { IsRecallingQueued: true } &&
+            (e.Key == System.Windows.Input.Key.Up || e.Key == System.Windows.Input.Key.Down) &&
+            (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Alt) != 0 &&
+            (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) == 0)
+        {
+            int delta = e.Key == System.Windows.Input.Key.Up ? -1 : +1;
+            if (conv.MoveRecalledQueued(delta))
+            {
+                e.Handled = true;
+                return;
+            }
+        }
+
         // Escape exits recall mode (restores the saved draft).
         if (e.Key == System.Windows.Input.Key.Escape && conv is { IsRecallingQueued: true })
         {
@@ -1215,10 +1700,71 @@ public partial class MainWindow : Window
         }), System.Windows.Threading.DispatcherPriority.Background);
     }
 
+    /// Every queue-chip button / text row bound in XAML carries its chip as
+    /// `Tag="{Binding}"` so the click handler can round-trip through the
+    /// DataTemplate. This helper resolves both sender shapes (Button, TextBlock)
+    /// and the current conversation in one shot; click handlers read as pure
+    /// verb + action now, without the repeated `is Button b && b.Tag is …` bag.
+    private bool TryQueuedChipAction(object sender,
+        out ConversationViewModel conv, out QueuedChatMessage msg)
+    {
+        conv = null!;
+        msg = null!;
+        var tag = sender switch
+        {
+            FrameworkElement fe => fe.Tag,
+            _ => null,
+        };
+        if (tag is not QueuedChatMessage m) return false;
+        var c = _vm.SelectedProject?.SelectedConversation;
+        if (c == null) return false;
+        conv = c;
+        msg = m;
+        return true;
+    }
+
     private void RemoveQueued_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is Button b && b.Tag is QueuedChatMessage msg)
-            _vm.SelectedProject?.SelectedConversation?.RemoveQueued(msg);
+        if (TryQueuedChipAction(sender, out var conv, out var msg))
+            conv.RemoveQueued(msg);
+    }
+
+    private void ClearQueue_Click(object sender, RoutedEventArgs e)
+    {
+        _vm.SelectedProject?.SelectedConversation?.ClearQueue();
+    }
+
+    private void CopyQueued_Click(object sender, RoutedEventArgs e)
+    {
+        if (TryQueuedChipAction(sender, out _, out var msg)
+            && !string.IsNullOrEmpty(msg.Text))
+        {
+            Services.ShellPathActions.CopyText(msg.Text);
+        }
+    }
+
+    private void DuplicateQueued_Click(object sender, RoutedEventArgs e)
+    {
+        if (TryQueuedChipAction(sender, out var conv, out var msg))
+            conv.DuplicateQueued(msg);
+    }
+
+    private void MoveQueuedUp_Click(object sender, RoutedEventArgs e)
+    {
+        if (TryQueuedChipAction(sender, out var conv, out var msg))
+            conv.MoveQueuedUp(msg);
+    }
+
+    private void MoveQueuedDown_Click(object sender, RoutedEventArgs e)
+    {
+        if (TryQueuedChipAction(sender, out var conv, out var msg))
+            conv.MoveQueuedDown(msg);
+    }
+
+    private void QueuedChipText_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (TryQueuedChipAction(sender, out var conv, out var msg))
+            conv.BeginEditQueued(msg);
     }
 
     // ---------- Slash commands (queue prompt area) ----------
@@ -1350,7 +1896,21 @@ public partial class MainWindow : Window
     }
 
     private void FilesRefresh_Click(object sender, RoutedEventArgs e)
-        => _vm.SelectedProject?.FileExplorer.Refresh();
+    {
+        var fx = _vm.SelectedProject?.FileExplorer;
+        if (fx == null) return;
+        // Default refresh keeps expansion state; Shift-click does a hard reset
+        // (fully wipe + rebuild) for the rare case where the tree has drifted.
+        if (System.Windows.Input.Keyboard.Modifiers.HasFlag(System.Windows.Input.ModifierKeys.Shift))
+            fx.HardRefresh();
+        else
+            fx.Refresh();
+    }
+
+    private void FilesCollapseAll_Click(object sender, RoutedEventArgs e)
+    {
+        _vm.SelectedProject?.FileExplorer?.CollapseAll();
+    }
 
     private void FileNode_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
@@ -1453,6 +2013,55 @@ public partial class MainWindow : Window
         if (confirm != MessageBoxResult.OK) { e.Handled = true; return; }
         await Git.DiscardAsync(row); e.Handled = true;
     }
+
+    // ---- Git file row right-click context menu ----
+
+    /// Same DataContext-inheritance trick as the conversation/commit row menus:
+    /// MenuItems inside the Border's ContextMenu inherit the row's DataContext,
+    /// so each click resolves straight to a `GitFileRow` without poking at
+    /// PlacementTarget.
+    private static GitFileRow? ResolveContextGitFileRow(object sender)
+        => sender is MenuItem mi ? mi.DataContext as GitFileRow : null;
+
+    private string? AbsoluteGitRowPath(GitFileRow row)
+    {
+        var wd = _vm.SelectedProject?.WorkingDirectory;
+        if (string.IsNullOrEmpty(wd) || string.IsNullOrEmpty(row.FullPath)) return null;
+        return System.IO.Path.GetFullPath(System.IO.Path.Combine(wd, row.FullPath));
+    }
+
+    private void GitFileRowOpen_Click(object sender, RoutedEventArgs e)
+    {
+        if (ResolveContextGitFileRow(sender) is { } row &&
+            AbsoluteGitRowPath(row) is { } abs)
+            ShellPathActions.Open(abs);
+    }
+
+    private void GitFileRowReveal_Click(object sender, RoutedEventArgs e)
+    {
+        if (ResolveContextGitFileRow(sender) is { } row &&
+            AbsoluteGitRowPath(row) is { } abs)
+            ShellPathActions.RevealInExplorer(abs);
+    }
+
+    private void GitFileRowCopyFullPath_Click(object sender, RoutedEventArgs e)
+    {
+        if (ResolveContextGitFileRow(sender) is { } row &&
+            AbsoluteGitRowPath(row) is { } abs)
+            ShellPathActions.CopyText(abs);
+    }
+
+    private void GitFileRowCopyRelPath_Click(object sender, RoutedEventArgs e)
+    {
+        if (ResolveContextGitFileRow(sender) is { } row)
+            ShellPathActions.CopyText(row.FullPath.Replace('\\', '/'));
+    }
+
+    private void GitFileRowCopyFileName_Click(object sender, RoutedEventArgs e)
+    {
+        if (ResolveContextGitFileRow(sender) is { } row)
+            ShellPathActions.CopyText(row.FileName);
+    }
     private async void GitStageAll_Click(object sender, RoutedEventArgs e)
         { if (Git != null) await Git.StageAllAsync(); }
     private async void GitUnstageAll_Click(object sender, RoutedEventArgs e)
@@ -1511,12 +2120,11 @@ public partial class MainWindow : Window
     {
         if (Git == null) return;
         GitBranchList.SelectedItem = Git.CurrentBranch;
-        GitBranchPopup.IsOpen = true;
-        Dispatcher.BeginInvoke(new Action(() =>
+        OpenPopupWithFocus(GitBranchPopup, () =>
         {
             if (GitBranchList.SelectedItem != null)
                 GitBranchList.ScrollIntoView(GitBranchList.SelectedItem);
-        }), System.Windows.Threading.DispatcherPriority.Background);
+        }, System.Windows.Threading.DispatcherPriority.Background);
     }
 
     private async void GitBranchList_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
@@ -1544,13 +2152,6 @@ public partial class MainWindow : Window
     }
 
     private async void GitStagedRow_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
-    {
-        if (IsClickInsideButton(e.OriginalSource as DependencyObject)) return;
-        if (sender is FrameworkElement fe && fe.DataContext is GitFileRow row)
-            await ShowGitDiffAsync(row);
-    }
-
-    private async void GitUnstagedRow_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         if (IsClickInsideButton(e.OriginalSource as DependencyObject)) return;
         if (sender is FrameworkElement fe && fe.DataContext is GitFileRow row)
@@ -1637,6 +2238,16 @@ public partial class MainWindow : Window
                $"+++ b/{row.FullPath}\n" +
                (lineCount > 0 ? $"@@ -0,0 +1,{lineCount} @@\n" : "") +
                body;
+    }
+
+    private void RunInIntegratedTerminal(string workingDirectory, string command)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory) || string.IsNullOrWhiteSpace(command)) return;
+
+        _vm.ConsoleTabIndex = 3;
+        var panel = _vm.SelectedProject?.TerminalPanel;
+        panel?.RunCommand(command);
+        _terminalHost?.FocusActive();
     }
 
     // ---------- package.json launcher ----------
@@ -1746,7 +2357,9 @@ public partial class MainWindow : Window
                     ToolTip = node.Command,
                 };
                 var captured = node.FullName!;
-                self.Click += (_, _) => PackageJsonService.RunScript(pkg.DirPath, pkg.PackageManager, captured);
+                self.Click += (_, _) => RunInIntegratedTerminal(
+                    pkg.DirPath,
+                    PackageJsonService.BuildRunCommand(pkg.PackageManager, captured));
                 item.Items.Add(self);
                 item.Items.Add(new Separator());
             }
@@ -1757,7 +2370,9 @@ public partial class MainWindow : Window
         {
             item.ToolTip = node.Command;
             var captured = node.FullName!;
-            item.Click += (_, _) => PackageJsonService.RunScript(pkg.DirPath, pkg.PackageManager, captured);
+            item.Click += (_, _) => RunInIntegratedTerminal(
+                pkg.DirPath,
+                PackageJsonService.BuildRunCommand(pkg.PackageManager, captured));
         }
 
         return item;
@@ -1854,6 +2469,8 @@ public partial class MainWindow : Window
     // ---- Immersive dark mode (title bar) ----
     private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
     private const int DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1 = 19;
+    private const int DWMWA_CAPTION_COLOR = 35;       // Windows 11 22H2+
+    private const int DWMWA_BORDER_COLOR = 34;        // Windows 11 22H2+
 
     [DllImport("dwmapi.dll", PreserveSig = true)]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
@@ -1868,7 +2485,74 @@ public partial class MainWindow : Window
             var rc = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref enable, sizeof(int));
             if (rc != 0)
                 DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1, ref enable, sizeof(int));
+
+            // Paint the caption and border in the same #1e1e1e as the client
+            // area so the whole chrome is flush-dark from frame 1. COLORREF is
+            // 0x00BBGGRR — #1e1e1e maps to 0x001e1e1e. Ignored on older Windows.
+            int dark = 0x001e1e1e;
+            DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, ref dark, sizeof(int));
+            DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, ref dark, sizeof(int));
         }
         catch { }
+    }
+
+    // ---- Startup flash fix: swap the HWND class background brush to dark ----
+    // WPF's HwndSource creates its top-level window with the default system
+    // class brush (COLOR_WINDOW → white on stock themes). That brush is what
+    // paints once on mapping, before WPF composes its first frame — which is
+    // the white flash the user sees on launch. Swapping the class brush to
+    // a #1e1e1e solid brush makes the pre-composition paint blend into the
+    // XAML background and removes the flash.
+    private const int GCLP_HBRBACKGROUND = -10;
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateSolidBrush(int color);
+
+    [DllImport("user32.dll", EntryPoint = "SetClassLongPtrW", SetLastError = true)]
+    private static extern IntPtr SetClassLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+    [DllImport("user32.dll", EntryPoint = "SetClassLongW", SetLastError = true)]
+    private static extern uint SetClassLong32(IntPtr hWnd, int nIndex, uint dwNewLong);
+
+    [DllImport("user32.dll")]
+    private static extern bool InvalidateRect(IntPtr hWnd, IntPtr lpRect, bool bErase);
+
+    private static IntPtr _darkBackgroundBrush = IntPtr.Zero;
+
+    private void TryPaintInitialDarkBackground()
+    {
+        try
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd == IntPtr.Zero) return;
+            if (_darkBackgroundBrush == IntPtr.Zero)
+                _darkBackgroundBrush = CreateSolidBrush(0x001e1e1e);
+            if (_darkBackgroundBrush == IntPtr.Zero) return;
+
+            if (IntPtr.Size == 8)
+                SetClassLongPtr64(hwnd, GCLP_HBRBACKGROUND, _darkBackgroundBrush);
+            else
+                SetClassLong32(hwnd, GCLP_HBRBACKGROUND, unchecked((uint)_darkBackgroundBrush.ToInt32()));
+
+            // Force an immediate erase with the new brush so the flash is
+            // painted dark rather than landing on a stale white buffer.
+            InvalidateRect(hwnd, IntPtr.Zero, true);
+        }
+        catch { }
+    }
+
+    /// Open a popup and run a focus/selection action once WPF has had a
+    /// chance to realise the popup's visual tree. Directly focusing the
+    /// input right after setting IsOpen=true races the layout pass and
+    /// silently fails, so every call site used to repeat the same
+    /// Dispatcher.BeginInvoke dance — this helper centralises it.
+    private void OpenPopupWithFocus(
+        System.Windows.Controls.Primitives.Popup popup,
+        Action onOpened,
+        System.Windows.Threading.DispatcherPriority priority =
+            System.Windows.Threading.DispatcherPriority.Input)
+    {
+        popup.IsOpen = true;
+        Dispatcher.BeginInvoke(onOpened, priority);
     }
 }

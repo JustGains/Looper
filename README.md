@@ -163,6 +163,18 @@ Each iteration has an inactivity timeout (default 120 s, configurable). If the C
 
 ---
 
+## Verification build
+
+Use the isolated verification script when you want a temp-dir build/run check that does not rely on repo-local output folders:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/verify-temp-run.ps1
+```
+
+The script clears the repo `obj` tree before building, uses temp `bin` / `obj` paths outside the repo, launches the built executable, closes that exact app instance, and fails if the legacy local `temp_bin` or `test-build` folders change during the check.
+
+---
+
 ## Troubleshooting
 
 - **"executable not found on PATH"** — verify `claude` or `codex` runs in a normal terminal.

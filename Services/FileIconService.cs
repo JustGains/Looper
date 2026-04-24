@@ -41,6 +41,44 @@ public static class FileIconService
         });
     }
 
+    /// True when an icon for this filename has already been resolved and
+    /// cached. Returns the cached drawing synchronously. Lets hot-path UI code
+    /// (TreeView realizing a batch of nodes) skip the thread-pool dispatch
+    /// altogether on a cache hit.
+    public static bool TryGetCachedFileIcon(string fileName, out DrawingImage? img)
+    {
+        var map = _map.IsValueCreated ? _map.Value : null;
+        if (map == null) { img = null; return false; }
+        var name = (fileName ?? "").ToLowerInvariant();
+        if (name.Length > 0 && map.Filenames.TryGetValue(name, out var byName)
+            && _cache.TryGetValue(byName, out var n1) && n1 != null) { img = n1; return true; }
+        int dot = name.IndexOf('.');
+        while (dot >= 0 && dot < name.Length - 1)
+        {
+            var ext = name.Substring(dot + 1);
+            if (map.Extensions.TryGetValue(ext, out var byExt)
+                && _cache.TryGetValue(byExt, out var n2) && n2 != null) { img = n2; return true; }
+            dot = name.IndexOf('.', dot + 1);
+        }
+        if (_cache.TryGetValue(map.Default, out var d) && d != null) { img = d; return true; }
+        img = null;
+        return false;
+    }
+
+    public static bool TryGetCachedFolderIcon(string folderName, bool open, out DrawingImage? img)
+    {
+        var map = _map.IsValueCreated ? _map.Value : null;
+        if (map == null) { img = null; return false; }
+        var name = (folderName ?? "").ToLowerInvariant();
+        var table = open ? map.FolderNamesOpen : map.FolderNames;
+        if (name.Length > 0 && table.TryGetValue(name, out var iconName)
+            && _cache.TryGetValue(iconName, out var n1) && n1 != null) { img = n1; return true; }
+        var def = open ? map.FolderDefaultOpen : map.FolderDefault;
+        if (_cache.TryGetValue(def, out var d) && d != null) { img = d; return true; }
+        img = null;
+        return false;
+    }
+
     public static DrawingImage? GetFileIcon(string fileName)
     {
         var map = _map.Value;
@@ -54,17 +92,21 @@ public static class FileIconService
             if (img != null) return img;
         }
 
-        // 2. Multi-part extension (".schema.json", ".config.ts"). Material
-        //    sometimes keys by composite extensions, so try longest first.
-        var parts = name.Split('.');
-        for (int start = 1; start < parts.Length; start++)
+        // 2. Extension match (longest composite first, down to the final
+        //    extension). "config.schema.json" tries "config.schema.json" ·
+        //    "schema.json" · "json". We scan left-to-right for '.' positions
+        //    and slice the tail with Substring — no Split/Skip/Join allocs.
+        //    Short-circuits cleanly for files with no '.'.
+        int dot = name.IndexOf('.');
+        while (dot >= 0 && dot < name.Length - 1)
         {
-            var ext = string.Join('.', parts.Skip(start));
+            var ext = name.Substring(dot + 1);
             if (map.Extensions.TryGetValue(ext, out var byExt))
             {
                 var img = LoadByName(byExt);
                 if (img != null) return img;
             }
+            dot = name.IndexOf('.', dot + 1);
         }
 
         // 3. Fallback default

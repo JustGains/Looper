@@ -9,6 +9,11 @@ namespace JustCode.Services;
 public sealed class StreamJsonFormatter : IIterationFormatter
 {
     private string? _activeBlockKind;
+    /// Kind of the most recently *closed* content block in this iteration.
+    /// Used to merge consecutive `thinking` blocks into one visual block so
+    /// the UI doesn't show repeated "🧠 thinking…" headers stacked with
+    /// extra blank space between them.
+    private string? _lastClosedBlockKind;
     private string? _activeToolName;
     private readonly StringBuilder _toolInputBuf = new();
     private readonly StringBuilder _assistantText = new();
@@ -164,15 +169,22 @@ public sealed class StreamJsonFormatter : IIterationFormatter
     private string OnBlockStart(JsonElement evt)
     {
         _toolInputBuf.Clear();
-        _currentBlockText.Clear();
         if (!evt.TryGetProperty("content_block", out var block)) return "";
         var kind = GetString(block, "type") ?? "";
+        // Two `thinking` blocks back-to-back read as one continuous thought.
+        // Skip the repeated header and keep accumulating into the same pinned
+        // buffer so the UI shows a single "🧠 thinking…" stanza.
+        bool mergeThinking = kind == "thinking" && _lastClosedBlockKind == "thinking";
+        if (!mergeThinking) _currentBlockText.Clear();
         _activeBlockKind = kind;
         switch (kind)
         {
             case "text":
                 return "";
             case "thinking":
+                // Previous thinking close emitted "\n", so we're already at
+                // column 0 — just open the gutter for the next line.
+                if (mergeThinking) return "│ ";
                 return "\n🧠 thinking…\n│ ";
             case "redacted_thinking":
                 return "\n🧠 thinking (redacted)\n│ [encrypted thinking — not shown]\n";
@@ -242,12 +254,24 @@ public sealed class StreamJsonFormatter : IIterationFormatter
             _toolInputBuf.Clear();
             var name = _activeToolName ?? "?";
             _activeToolName = null;
+            _lastClosedBlockKind = kind;
             return $"\n▸ {name}({SummariseToolInput(input)})\n";
         }
+        bool emitted = _currentBlockText.Length > 0;
         if (kind == "thinking")
-            return "\n";
+        {
+            _lastClosedBlockKind = kind;
+            return emitted ? "\n" : "";
+        }
         if (kind == "text")
-            return "\n";
+        {
+            // An empty text block shouldn't punctuate the display, and it
+            // shouldn't reset the "last meaningful kind" — otherwise a stray
+            // empty text between two thinking blocks defeats the merge.
+            if (emitted) _lastClosedBlockKind = kind;
+            return emitted ? "\n" : "";
+        }
+        _lastClosedBlockKind = kind;
         return "";
     }
 

@@ -45,6 +45,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public bool CanCloseAny => Projects.Count > 1;
 
+    public sealed record RecentWorkspaceEntry(
+        string Path,
+        string DisplayName,
+        bool IsOpen,
+        bool IsMissing,
+        bool IsSelected);
+
     // ---- tool/model/effort lookups (static; conversations reference these) ----
     public sealed record ToolOption(CliTool Tool, string Name)
     {
@@ -63,7 +70,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public static IReadOnlyList<string> ClaudeEfforts { get; } = new[]
     { "", "low", "medium", "high", "xhigh", "max" };
     public static IReadOnlyList<string> CodexModels { get; } = new[]
-    { "", "gpt-5-codex", "gpt-5", "gpt-5.4", "o4-mini", "o3" };
+    { "", "gpt-5-codex", "gpt-5.5", "gpt-5", "gpt-5.4", "o4-mini", "o3" };
     public static IReadOnlyList<string> CodexEfforts { get; } = new[]
     { "", "low", "medium", "high" };
     /// Seed list used until `pi --list-models` populates the live cache.
@@ -96,6 +103,40 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         get => Settings.TasksTabIndex;
         set { if (Settings.TasksTabIndex == value) return; Settings.TasksTabIndex = value; SaveConfig(); OnChanged(); }
+    }
+
+    public int ConsoleTabIndex
+    {
+        get => Settings.ConsoleTabIndex;
+        set
+        {
+            if (Settings.ConsoleTabIndex == value) return;
+            Settings.ConsoleTabIndex = value;
+            SaveConfig();
+            OnChanged();
+            OnChanged(nameof(IsConversationBarVisible));
+        }
+    }
+
+    // The chat/send bar lives outside the console TabControl and sits at the
+    // bottom of the console panel. The Terminal tab has its own input bar, so
+    // stacking both looks wrong — hide the chat bar while the Terminal tab is
+    // selected.
+    public bool IsConversationBarVisible => Settings.ConsoleTabIndex != 3;
+
+    // ---- terminal ----
+    public IReadOnlyList<ShellProfile> AvailableShells => ShellDetector.Available;
+
+    public string DefaultShellId
+    {
+        get => Settings.DefaultShellId;
+        set
+        {
+            if (Settings.DefaultShellId == value) return;
+            Settings.DefaultShellId = value ?? "";
+            SaveConfig();
+            OnChanged();
+        }
     }
 
     public bool AutoScrollConsole
@@ -199,24 +240,94 @@ public sealed class MainViewModel : INotifyPropertyChanged
         SaveConfig();
     }
 
+    public IReadOnlyList<RecentWorkspaceEntry> GetRecentWorkspaceEntries()
+    {
+        var entries = new List<RecentWorkspaceEntry>(Projects.Count + Settings.RecentWorkingDirectories.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var selected = SelectedProject?.WorkingDirectory;
+
+        foreach (var project in Projects)
+        {
+            var path = ConfigStore.Normalize(project.WorkingDirectory);
+            if (!seen.Add(path)) continue;
+            entries.Add(new RecentWorkspaceEntry(
+                path,
+                BuildWorkspaceDisplayName(path),
+                IsOpen: true,
+                IsMissing: false,
+                IsSelected: string.Equals(path, selected, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        foreach (var raw in Settings.RecentWorkingDirectories)
+        {
+            var path = ConfigStore.Normalize(raw);
+            if (!seen.Add(path)) continue;
+            bool exists;
+            try { exists = Directory.Exists(path); }
+            catch { exists = false; }
+
+            entries.Add(new RecentWorkspaceEntry(
+                path,
+                BuildWorkspaceDisplayName(path),
+                IsOpen: Projects.Any(p => string.Equals(p.WorkingDirectory, path, StringComparison.OrdinalIgnoreCase)),
+                IsMissing: !exists,
+                IsSelected: string.Equals(path, selected, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        return entries;
+    }
+
+    public bool RemoveRecentWorkspace(string dir)
+    {
+        if (!_configStore.RemoveRecent(Settings, dir)) return false;
+        SyncRecentList();
+        SaveConfig();
+        return true;
+    }
+
+    public int RemoveMissingRecentWorkspaces()
+    {
+        int removed = _configStore.RemoveMissingRecentDirectories(Settings);
+        if (removed <= 0) return 0;
+        SyncRecentList();
+        SaveConfig();
+        return removed;
+    }
+
+    private static string BuildWorkspaceDisplayName(string path)
+    {
+        var leaf = Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        return string.IsNullOrEmpty(leaf) ? path : leaf;
+    }
+
     private void SyncRecentList()
     {
-        var desired = Settings.RecentWorkingDirectories;
+        var desired = Settings.RecentWorkingDirectories
+            .Select(ConfigStore.Normalize)
+            .ToList();
+        var desiredSet = new HashSet<string>(desired, StringComparer.OrdinalIgnoreCase);
+
         for (int i = RecentWorkingDirectories.Count - 1; i >= 0; i--)
         {
-            if (!desired.Any(d => string.Equals(d, RecentWorkingDirectories[i], StringComparison.OrdinalIgnoreCase)))
+            var existing = ConfigStore.Normalize(RecentWorkingDirectories[i]);
+            if (!desiredSet.Contains(existing))
                 RecentWorkingDirectories.RemoveAt(i);
         }
+
         for (int i = 0; i < desired.Count; i++)
         {
-            var d = desired[i];
+            var path = desired[i];
             int cur = -1;
             for (int j = 0; j < RecentWorkingDirectories.Count; j++)
             {
-                if (string.Equals(RecentWorkingDirectories[j], d, StringComparison.OrdinalIgnoreCase))
-                { cur = j; break; }
+                if (string.Equals(ConfigStore.Normalize(RecentWorkingDirectories[j]), path, StringComparison.OrdinalIgnoreCase))
+                {
+                    cur = j;
+                    break;
+                }
             }
-            if (cur < 0) RecentWorkingDirectories.Insert(i, d);
+
+            if (cur < 0) RecentWorkingDirectories.Insert(i, path);
             else if (cur != i) RecentWorkingDirectories.Move(cur, i);
         }
     }

@@ -64,6 +64,19 @@ public sealed class FileNode : INotifyPropertyChanged
             if (!_iconLoadStarted)
             {
                 _iconLoadStarted = true;
+                // Fast path: if the icon was already parsed for a previous
+                // node with the same extension/folder name, skip the thread
+                // pool entirely. A single dictionary lookup instead of a
+                // Task.Run + InvokeAsync round-trip — noticeable when the
+                // TreeView realizes a large batch of nodes at once.
+                bool cached = IsDirectory
+                    ? FileIconService.TryGetCachedFolderIcon(Name, _isExpanded, out var cachedImg)
+                    : FileIconService.TryGetCachedFileIcon(Name, out cachedImg);
+                if (cached && cachedImg != null)
+                {
+                    _icon = cachedImg;
+                    return _icon;
+                }
                 LoadIconAsync();
             }
             return null;
@@ -105,13 +118,45 @@ public sealed class FileNode : INotifyPropertyChanged
         return node;
     }
 
-    private void LoadChildren()
+    private void LoadChildren() => RebuildChildren(preservedExpansions: null);
+
+    /// Re-read the directory from disk while keeping previously-expanded
+    /// subdirectories expanded (recursively). Used by the explorer `Refresh`
+    /// button so external file creations/deletions show up without
+    /// collapsing the user's navigation. Unexpanded subtrees keep their
+    /// dummy placeholder so the existing lazy-load path still applies.
+    public void ReloadChildren()
+    {
+        if (!IsDirectory || !_loaded) return;
+        var expanded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        CollectExpandedDescendants(this, expanded);
+        RebuildChildren(expanded);
+    }
+
+    private static void CollectExpandedDescendants(FileNode node, HashSet<string> into)
+    {
+        foreach (var child in node.Children)
+        {
+            if (child.IsDirectory && child.IsExpanded)
+            {
+                into.Add(child.FullPath);
+                CollectExpandedDescendants(child, into);
+            }
+        }
+    }
+
+    private void RebuildChildren(HashSet<string>? preservedExpansions)
     {
         Children.Clear();
         try
         {
-            foreach (var d in Directory.EnumerateDirectories(FullPath)
-                .OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+            // List.Sort + StringComparer.OrdinalIgnoreCase is cheaper than
+            // LINQ OrderBy here — OrderBy would allocate a lookup table and
+            // project each element, List<T>.Sort does it in place with a
+            // single Comparer delegate.
+            var dirs = Directory.GetDirectories(FullPath);
+            Array.Sort(dirs, StringComparer.OrdinalIgnoreCase);
+            foreach (var d in dirs)
             {
                 var name = Path.GetFileName(d) ?? "";
                 if (IsSkipped(name)) continue;
@@ -123,10 +168,22 @@ public sealed class FileNode : INotifyPropertyChanged
                 };
                 child.Children.Add(DummyChild);
                 Children.Add(child);
+
+                if (preservedExpansions != null &&
+                    preservedExpansions.Contains(child.FullPath))
+                {
+                    // Bypass the IsExpanded setter's default LoadChildren call
+                    // so we can recurse into the rebuild with the same set and
+                    // keep deep expansion state intact.
+                    child._isExpanded = true;
+                    child.PropertyChanged?.Invoke(child, new PropertyChangedEventArgs(nameof(IsExpanded)));
+                    child.RebuildChildren(preservedExpansions);
+                }
             }
 
-            foreach (var f in Directory.EnumerateFiles(FullPath)
-                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+            var files = Directory.GetFiles(FullPath);
+            Array.Sort(files, StringComparer.OrdinalIgnoreCase);
+            foreach (var f in files)
             {
                 Children.Add(new FileNode
                 {
@@ -143,15 +200,9 @@ public sealed class FileNode : INotifyPropertyChanged
         }
     }
 
-    /// Directory-name blocklist. Mirrors the package-json discovery skip set:
-    /// skip heavy build output and dotfile trees that nobody wants to browse.
-    private static bool IsSkipped(string name)
-    {
-        if (string.IsNullOrEmpty(name)) return true;
-        if (name.StartsWith('.')) return true; // .git, .vscode, .idea, .next, .cache, .venv…
-        return name is "node_modules" or "dist" or "build" or "out" or "target"
-            or "bin" or "obj" or "coverage" or "__pycache__" or "venv";
-    }
+    /// Directory-name blocklist delegated to the shared helper so the file
+    /// explorer and package-json discovery never drift out of sync.
+    private static bool IsSkipped(string name) => DirectorySkipList.ShouldHideInTree(name);
 }
 
 public sealed class FileExplorerViewModel : INotifyPropertyChanged
@@ -173,7 +224,7 @@ public sealed class FileExplorerViewModel : INotifyPropertyChanged
         {
             if (_isActive == value) return;
             _isActive = value;
-            if (value && !_loadedOnce) { _loadedOnce = true; Refresh(); }
+            if (value && !_loadedOnce) { _loadedOnce = true; HardRefresh(); }
         }
     }
 
@@ -183,9 +234,18 @@ public sealed class FileExplorerViewModel : INotifyPropertyChanged
         // Deferred: no disk walk until IsActive flips on.
     }
 
-    /// Force a re-read of the root. Useful after the user has created files
-    /// outside the app and wants them to show up.
+    /// Re-read the tree from disk while keeping every expanded folder open.
+    /// Default behaviour of the Files-pane Refresh button — external file
+    /// creations/deletions show up without collapsing the user's navigation.
     public void Refresh()
+    {
+        if (Roots.Count == 0) { HardRefresh(); return; }
+        foreach (var root in Roots) root.ReloadChildren();
+    }
+
+    /// Wipe and rebuild from scratch. Used on first activation and when the
+    /// user explicitly wants a fresh tree (Shift+click on the Refresh button).
+    public void HardRefresh()
     {
         Roots.Clear();
         if (!Directory.Exists(WorkingDirectory)) return;
@@ -196,27 +256,37 @@ public sealed class FileExplorerViewModel : INotifyPropertyChanged
         OnChanged(nameof(Roots));
     }
 
+    /// Collapse every currently-expanded directory in the tree, keeping only
+    /// the root nodes open. The user's loaded data isn't dropped — re-expand
+    /// is instant because children are still in memory.
+    public void CollapseAll()
+    {
+        foreach (var r in Roots)
+        {
+            // Collapse every descendant; leave the root itself expanded so
+            // the pane doesn't look empty after the click.
+            foreach (var child in r.Children) CollapseRecursive(child);
+        }
+    }
+
+    private static void CollapseRecursive(FileNode n)
+    {
+        if (!n.IsDirectory) return;
+        foreach (var c in n.Children) CollapseRecursive(c);
+        if (n.IsExpanded) n.IsExpanded = false;
+    }
+
     /// Reveal the node's parent in Explorer with the item pre-selected.
     public static void RevealInExplorer(FileNode node)
-        => SafeProcess.Start("explorer.exe", $"/select,\"{node.FullPath}\"");
+        => ShellPathActions.RevealInExplorer(node.FullPath);
 
     /// Open a file with the OS default handler. Directories are revealed in
     /// Explorer; files are shell-executed (respects user's default association).
     public static void Open(FileNode node)
-    {
-        if (node.IsDirectory)
-            SafeProcess.Start("explorer.exe", $"\"{node.FullPath}\"");
-        else
-            SafeProcess.Start(node.FullPath);
-    }
-
-    private static void TrySetClipboard(string text)
-    {
-        try { System.Windows.Clipboard.SetText(text); } catch { }
-    }
+        => ShellPathActions.Open(node.FullPath);
 
     /// Copy the file's path to the clipboard.
-    public static void CopyPath(FileNode node) => TrySetClipboard(node.FullPath);
+    public static void CopyPath(FileNode node) => ShellPathActions.CopyPath(node.FullPath);
 
     /// Copy the file's relative path to the clipboard.
     public static void CopyRelativePath(FileNode node, string rootDir)
@@ -224,13 +294,13 @@ public sealed class FileExplorerViewModel : INotifyPropertyChanged
         try
         {
             var rel = Path.GetRelativePath(rootDir, node.FullPath).Replace('\\', '/');
-            TrySetClipboard(rel);
+            ShellPathActions.CopyText(rel);
         }
         catch { }
     }
 
     /// Copy the file's name (leaf) to the clipboard.
-    public static void CopyFileName(FileNode node) => TrySetClipboard(node.Name);
+    public static void CopyFileName(FileNode node) => ShellPathActions.CopyText(node.Name);
 
     /// Copy the text content of a file to the clipboard (skip if too large).
     public static void CopyFileContent(FileNode node, int maxBytes = 100_000)
@@ -241,20 +311,14 @@ public sealed class FileExplorerViewModel : INotifyPropertyChanged
             var info = new FileInfo(node.FullPath);
             if (!info.Exists || info.Length > maxBytes) return;
             var text = File.ReadAllText(node.FullPath);
-            TrySetClipboard(text);
+            ShellPathActions.CopyText(text);
         }
         catch { }
     }
 
     /// Open Windows Terminal in the node's directory.
     public static void OpenTerminalHere(FileNode node)
-    {
-        var dir = node.IsDirectory ? node.FullPath : Path.GetDirectoryName(node.FullPath);
-        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
-        SafeProcess.Start("wt.exe", $"-d \"{dir}\"");
-        // Fallback if Windows Terminal is not installed.
-        SafeProcess.Start("cmd.exe", $"/K cd /d \"{dir}\"");
-    }
+        => ShellPathActions.OpenTerminalHere(node.FullPath);
 
     private void OnChanged([CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

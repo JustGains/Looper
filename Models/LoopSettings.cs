@@ -34,11 +34,17 @@ public sealed class LoopSettings
 
     // UI
     public int TasksTabIndex { get; set; } = 1;
+    public int ConsoleTabIndex { get; set; } = 0;
     public bool AutoScrollConsole { get; set; } = true;
     public bool WordWrapConsole { get; set; } = true;
     public bool CollapseToolCalls { get; set; } = false;
     public bool KeepContext { get; set; } = false;
     public bool AutoScrollTasks { get; set; } = false;
+
+    // Terminal
+    /// Id of the default shell profile (see ShellDetector). Empty/unknown
+    /// resolves to the first detected shell — pwsh > powershell > cmd.
+    public string DefaultShellId { get; set; } = "";
 
     // Window bounds
     public double? WindowLeft { get; set; }

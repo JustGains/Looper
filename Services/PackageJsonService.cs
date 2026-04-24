@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 
@@ -131,29 +130,8 @@ public static class PackageJsonService
         return root;
     }
 
-    /// Launch `<pm> run <script>` in a new visible cmd window inside `dir`.
-    /// `cmd /k` keeps the window open after the script exits so the user can
-    /// inspect output; closing the window kills the process tree.
-    public static void RunScript(string dir, string packageManager, string scriptName)
-    {
-        try
-        {
-            var system = Environment.GetFolderPath(Environment.SpecialFolder.System);
-            var cmdExe = Path.Combine(system, "cmd.exe");
-            // Build a command line that cd's into the package dir then runs the
-            // script. /k leaves the prompt open when finished.
-            var commandLine = $"/k cd /d \"{dir}\" && {packageManager} run {scriptName}";
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = cmdExe,
-                Arguments = commandLine,
-                UseShellExecute = true, // must be true to get a visible console window
-                WorkingDirectory = dir,
-                CreateNoWindow = false,
-            });
-        }
-        catch { /* best-effort; a missing pm shows its own error in the terminal */ }
-    }
+    public static string BuildRunCommand(string packageManager, string scriptName)
+        => $"{packageManager} run {QuotePowerShell(scriptName)}";
 
     private static PackageInfo? TryParse(string workingDirectory, string packageJsonPath, bool isRoot)
     {
@@ -210,18 +188,19 @@ public static class PackageJsonService
         return "npm";
     }
 
+    private static string QuotePowerShell(string value)
+        => "'" + value.Replace("'", "''") + "'";
+
     /// Hardcoded skip set plus any directory names listed in the project root
     /// .gitignore. Full gitignore semantics (negations, nested patterns, glob
     /// stars) are intentionally out of scope — this is a heuristic, not a
     /// compliance layer.
     private static HashSet<string> BuildSkipSet(string workingDirectory)
     {
-        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "node_modules", "dist", "build", "out", "target", ".next", ".nuxt",
-            ".svelte-kit", ".turbo", ".cache", "coverage", ".output", ".venv",
-            "venv", "__pycache__", "bin", "obj",
-        };
+        // Seed from the shared canonical list (same as the file explorer) so
+        // a new build-output directory added to DirectorySkipList is picked up
+        // by every walker without touching this method.
+        var set = new HashSet<string>(DirectorySkipList.BuildOutputs, StringComparer.OrdinalIgnoreCase);
         try
         {
             var gitignore = Path.Combine(workingDirectory, ".gitignore");

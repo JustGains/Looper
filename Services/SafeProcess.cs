@@ -7,12 +7,20 @@ namespace JustCode.Services;
 /// issues. Used by view models that just want to "fire and forget".</summary>
 public static class SafeProcess
 {
-    public static void Start(string fileName, string? arguments = null)
+    public static void Start(string fileName, string? arguments = null) =>
+        TryStart(fileName, arguments);
+
+    /// <summary>Same fire-and-forget semantics as Start, but reports whether
+    /// the process was actually spawned. Callers that want a graceful fallback
+    /// (e.g. try wt.exe, fall back to cmd.exe if Windows Terminal isn't
+    /// installed) use this so they don't end up launching both at once.</summary>
+    public static bool TryStart(string fileName, string? arguments = null)
     {
         try
         {
-            Process.Start(new ProcessStartInfo(fileName, arguments ?? "") { UseShellExecute = true });
+            var p = Process.Start(new ProcessStartInfo(fileName, arguments ?? "") { UseShellExecute = true });
+            return p != null;
         }
-        catch { }
+        catch { return false; }
     }
 }

@@ -4,11 +4,23 @@ using System.Windows.Threading;
 
 namespace JustCode.Services;
 
-/// Per-tasks.md statistics used to build loop context prompts.
-public readonly record struct TaskStats(int Open, int Closed, string? LastSummary)
+public enum TaskViewFilter
+{
+    All,
+    Open,
+    Done,
+    Summaries,
+    LatestSummary,
+}
+
+/// Per-tasks.md statistics used to build loop context prompts and task-pane UI.
+public readonly record struct TaskStats(int Open, int Closed, string? LastSummary, int SummaryCount = 0)
 {
     public int Total => Open + Closed;
 }
+
+public readonly record struct TaskProjection(TaskStats Stats, string Content);
+public readonly record struct TaskDocumentAnalysis(TaskStats Stats, IReadOnlyList<string> SummarySections);
 
 public static class TasksMarkdownAnalyzer
 {
@@ -25,19 +37,22 @@ public static class TasksMarkdownAnalyzer
         RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public static TaskStats Analyze(string? content)
+        => AnalyzeDocument(content).Stats;
+
+    public static TaskDocumentAnalysis AnalyzeDocument(string? content)
     {
         if (string.IsNullOrEmpty(content))
-            return new TaskStats(0, 0, null);
+            return new TaskDocumentAnalysis(new TaskStats(0, 0, null, 0), Array.Empty<string>());
 
         int open = OpenBox.Matches(content).Count;
         int closed = ClosedBox.Matches(content).Count;
 
+        var summarySections = ExtractSummarySections(content);
         string? summary = null;
-        var matches = SummaryBlock.Matches(content);
-        if (matches.Count > 0)
+        int summaryCount = summarySections.Count;
+        if (summaryCount > 0)
         {
-            var last = matches[matches.Count - 1];
-            var body = last.Groups["body"].Value.Trim();
+            var body = summarySections[summaryCount - 1];
             if (!string.IsNullOrWhiteSpace(body))
             {
                 // Keep it compact — 240 char cap so loop-context prompts don't
@@ -46,7 +61,74 @@ public static class TasksMarkdownAnalyzer
             }
         }
 
-        return new TaskStats(open, closed, summary);
+        return new TaskDocumentAnalysis(new TaskStats(open, closed, summary, summaryCount), summarySections);
+    }
+
+    public static TaskProjection CreateProjection(string? content, TaskViewFilter filter)
+    {
+        var source = content ?? "";
+        var analysis = AnalyzeDocument(source);
+        var stats = analysis.Stats;
+        var projected = filter switch
+        {
+            TaskViewFilter.Open => BuildCheckboxProjection(source, OpenBox, "Open tasks", stats.Open),
+            TaskViewFilter.Done => BuildCheckboxProjection(source, ClosedBox, "Completed tasks", stats.Closed),
+            TaskViewFilter.Summaries => BuildSummaryProjection(analysis.SummarySections, stats.SummaryCount),
+            TaskViewFilter.LatestSummary => BuildLatestSummaryProjection(analysis.SummarySections),
+            _ => string.IsNullOrWhiteSpace(source) ? "_No tasks yet._" : source,
+        };
+        return new TaskProjection(stats, projected);
+    }
+
+    private static string BuildCheckboxProjection(string content, Regex matcher, string heading, int count)
+    {
+        var lines = new List<string>();
+        using var reader = new StringReader(content);
+        while (reader.ReadLine() is { } line)
+        {
+            if (matcher.IsMatch(line))
+                lines.Add(line);
+        }
+
+        if (lines.Count == 0)
+            return $"### {heading} ({count})\n\n_None._";
+
+        return $"### {heading} ({count})\n\n" + string.Join(Environment.NewLine, lines);
+    }
+
+    private static List<string> ExtractSummarySections(string content)
+    {
+        var matches = SummaryBlock.Matches(content);
+        var sections = new List<string>(matches.Count);
+        foreach (Match match in matches)
+        {
+            var block = match.Value.Trim();
+            if (!string.IsNullOrWhiteSpace(block))
+                sections.Add(block);
+        }
+
+        return sections;
+    }
+
+    private static string BuildSummaryProjection(IReadOnlyList<string> sections, int summaryCount)
+    {
+        if (sections.Count == 0)
+            return "### Session summaries (0)\n\n_None yet._";
+
+        if (sections.Count == 0)
+            return $"### Session summaries ({summaryCount})\n\n_None yet._";
+
+        return $"### Session summaries ({summaryCount})\n\n" + string.Join(
+            Environment.NewLine + Environment.NewLine,
+            sections);
+    }
+
+    private static string BuildLatestSummaryProjection(IReadOnlyList<string> sections)
+    {
+        if (sections.Count == 0)
+            return "### Latest session summary\n\n_None yet._";
+
+        return "### Latest session summary\n\n" + sections[^1];
     }
 }
 

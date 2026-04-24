@@ -34,6 +34,12 @@ public sealed class LoopRunner
 
     public bool IsRunning => _cts != null;
 
+    /// Master switch for the git-progress circuit breaker. Disabled for now —
+    /// the "no git progress" detection trips on legitimate research/planning
+    /// iterations where the model is genuinely working but not yet writing
+    /// files. Flip back to true once we have a smarter progress signal.
+    private const bool EnableProgressCircuit = false;
+
     public LoopRunner(CliProcessRunner runner)
     {
         _runner = runner;
@@ -88,7 +94,7 @@ public sealed class LoopRunner
                 // allow queued chat turns (manual interjection).
                 var queuedPrompt = tryDequeueQueued();
                 bool isQueued = queuedPrompt != null;
-                if (!isQueued && circuit.State == CircuitState.Open)
+                if (EnableProgressCircuit && !isQueued && circuit.State == CircuitState.Open)
                 {
                     Output?.Invoke(this, "[justcode] circuit open — progress stalled for "
                         + $"{circuit.ConsecutiveNoProgress} iterations. Pausing the loop. "
@@ -246,8 +252,9 @@ public sealed class LoopRunner
                         carryGuidance.Add($"The previous iteration had {f.IterationToolErrors} tool errors. Read the error output carefully, diagnose the root cause, and verify your fix before continuing.");
                 }
 
-                // Git progress → circuit breaker. Skipped for queued turns.
-                if (!isQueued)
+                // Git progress → circuit breaker. Skipped for queued turns,
+                // and skipped entirely when the breaker is disabled.
+                if (EnableProgressCircuit && !isQueued)
                 {
                     if (git.IsGitRepo && !git.HasProgressed())
                     {
@@ -301,7 +308,7 @@ public sealed class LoopRunner
                         // Don't increment iter — retry this slot in the fresh
                         // session. If the retry also fatals, the circuit will
                         // eventually trip (consecutive no-progress).
-                        if (!isQueued && circuit.State == CircuitState.Open)
+                        if (EnableProgressCircuit && !isQueued && circuit.State == CircuitState.Open)
                         {
                             Output?.Invoke(this, "[justcode] circuit already open — stopping after recovery attempt.\n");
                             Status?.Invoke(this, "Circuit open");

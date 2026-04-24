@@ -42,6 +42,7 @@ public sealed class ConfigStore
                     foreach (var r in cfg.StylingRules) r.Compile();
 
                     MigrateLegacyProjectFields(cfg);
+                    NormalizeRecentDirectories(cfg, keepMissing: true);
                     return cfg;
                 }
             }
@@ -59,6 +60,7 @@ public sealed class ConfigStore
         {
             var dir = System.IO.Path.GetDirectoryName(Path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            NormalizeRecentDirectories(s, keepMissing: true);
             File.WriteAllText(Path, JsonSerializer.Serialize(s, JsonOpts));
         }
         catch { }
@@ -69,11 +71,27 @@ public sealed class ConfigStore
     {
         if (string.IsNullOrWhiteSpace(dir)) return;
         var normalized = Normalize(dir);
-        s.RecentWorkingDirectories.RemoveAll(d =>
-            string.Equals(Normalize(d), normalized, StringComparison.OrdinalIgnoreCase));
+        RemoveRecent(s, normalized);
         s.RecentWorkingDirectories.Insert(0, normalized);
-        while (s.RecentWorkingDirectories.Count > MaxRecent)
-            s.RecentWorkingDirectories.RemoveAt(s.RecentWorkingDirectories.Count - 1);
+        NormalizeRecentDirectories(s, keepMissing: true);
+    }
+
+    public bool RemoveRecent(LoopSettings s, string dir)
+    {
+        if (string.IsNullOrWhiteSpace(dir)) return false;
+        var normalized = Normalize(dir);
+        return s.RecentWorkingDirectories.RemoveAll(d =>
+            string.Equals(Normalize(d), normalized, StringComparison.OrdinalIgnoreCase)) > 0;
+    }
+
+    public int RemoveMissingRecentDirectories(LoopSettings s)
+    {
+        NormalizeRecentDirectories(s, keepMissing: true);
+        return s.RecentWorkingDirectories.RemoveAll(d =>
+        {
+            try { return !Directory.Exists(d); }
+            catch { return true; }
+        });
     }
 
     /// Append to OpenProjects without duplicates.
@@ -98,6 +116,29 @@ public sealed class ConfigStore
     {
         try { return System.IO.Path.GetFullPath(p).TrimEnd('\\', '/'); }
         catch { return p.TrimEnd('\\', '/'); }
+    }
+
+    private static void NormalizeRecentDirectories(LoopSettings s, bool keepMissing)
+    {
+        var unique = new List<string>(Math.Min(MaxRecent, s.RecentWorkingDirectories.Count));
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in s.RecentWorkingDirectories)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            var normalized = Normalize(raw);
+            if (!seen.Add(normalized)) continue;
+            if (!keepMissing)
+            {
+                try
+                {
+                    if (!Directory.Exists(normalized)) continue;
+                }
+                catch { continue; }
+            }
+            unique.Add(normalized);
+            if (unique.Count >= MaxRecent) break;
+        }
+        s.RecentWorkingDirectories = unique;
     }
 
     private static void MergeMissingDefaults(List<StylingRule> existing)

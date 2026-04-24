@@ -37,6 +37,11 @@ public sealed class ConversationSettings
     /// into a context the model has long forgotten.
     public DateTime? LastSessionTimestamp { get; set; }
 
+    /// Pinned conversations sort to the top of the project's conversation
+    /// list regardless of creation order. Useful for parking long-running
+    /// tasks above newer, short-lived exploratory conversations.
+    public bool IsPinned { get; set; }
+
     /// Map of short `@label` (the portion after '@', e.g. "WorkoutScreen.tsx"
     /// or "workout/WorkoutScreen.tsx" for disambiguation) → full relative path.
     /// The TextBox stores `@label`; the loop runner submits the expanded form.

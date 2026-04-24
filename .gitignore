@@ -68,3 +68,5 @@ coverage*.info
 .build-test2/
 .build-test3/
 publish/
+temp_bin/
+test-build/

@@ -32,6 +32,44 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
 
     public ObservableCollection<ConversationViewModel> Conversations { get; } = new();
 
+    /// Filtered view over `Conversations` driven by <see cref="ConversationFilter"/>.
+    /// The XAML `ListBox` binds to this instead of the raw collection so that
+    /// typing in the filter box hides non-matching rows without disturbing
+    /// the underlying order (and therefore the persisted ConversationOrder).
+    public System.ComponentModel.ICollectionView ConversationsView { get; private set; } = null!;
+
+    private string _conversationFilter = "";
+    public string ConversationFilter
+    {
+        get => _conversationFilter;
+        set
+        {
+            var v = value ?? "";
+            if (_conversationFilter == v) return;
+            _conversationFilter = v;
+            ConversationsView.Refresh();
+            OnChanged();
+            OnChanged(nameof(HasConversationFilter));
+            OnChanged(nameof(FilterMatchedNothing));
+        }
+    }
+
+    public bool HasConversationFilter => !string.IsNullOrEmpty(_conversationFilter);
+    /// True iff the user typed a filter that no conversation name matches —
+    /// the XAML uses this to surface a gentle "no matches" placeholder.
+    public bool FilterMatchedNothing =>
+        HasConversationFilter && !Conversations.Any(FilterAccepts);
+
+    private bool FilterAccepts(object? item) =>
+        item is ConversationViewModel c && FilterAccepts(c);
+    private bool FilterAccepts(ConversationViewModel c)
+    {
+        if (!HasConversationFilter) return true;
+        return c.Name?.IndexOf(_conversationFilter, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    public void ClearConversationFilter() => ConversationFilter = "";
+
     private ConversationViewModel? _selectedConversation;
     public ConversationViewModel? SelectedConversation
     {
@@ -125,6 +163,11 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
     public bool IsConversationsTab => SidebarTab == "conversations";
     public bool IsGitTab => SidebarTab == "git";
 
+    /// VS Code-style multi-session terminal panel scoped to this project.
+    /// Created after WorkingDirectory is known so sessions spawn in the right
+    /// cwd. Disposed on project shutdown.
+    public TerminalPanelViewModel TerminalPanel { get; private set; } = null!;
+
     public ProjectViewModel(string workingDirectory, LoopSettings shellDefaults)
     {
         WorkingDirectory = ConfigStore.Normalize(workingDirectory);
@@ -134,6 +177,9 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
         ConversationStore.MigrateLegacyIfNeeded(WorkingDirectory, shellDefaults);
 
         _projectConfig = ConversationStore.LoadProject(WorkingDirectory);
+        TerminalPanel = new TerminalPanelViewModel(
+            () => WorkingDirectory,
+            () => _shellDefaults.DefaultShellId);
 
         // Load conversations
         var foundIds = ConversationStore.EnumerateConversationIds(WorkingDirectory);
@@ -163,12 +209,23 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
                 foreach (ConversationViewModel c in e.NewItems) c.PropertyChanged += OnConvPropertyChanged;
             if (e.OldItems != null)
                 foreach (ConversationViewModel c in e.OldItems) c.PropertyChanged -= OnConvPropertyChanged;
+            OnChanged(nameof(FilterMatchedNothing));
         };
+
+        // Shared filtered view used by the conversations ListBox. Live filtering
+        // reacts to ConversationFilter changes via the setter's `Refresh()`.
+        var view = System.Windows.Data.CollectionViewSource.GetDefaultView(Conversations);
+        view.Filter = FilterAccepts;
+        ConversationsView = view;
 
         // Pick the last-used conversation if possible
         _selectedConversation = Conversations.FirstOrDefault(c =>
             string.Equals(c.Id, _projectConfig.LastConversationId, StringComparison.OrdinalIgnoreCase))
             ?? Conversations.FirstOrDefault();
+
+        // Float any pre-pinned items to the top (ConversationOrder gets
+        // rewritten to reflect pinned-first so subsequent loads skip this).
+        ResortConversations();
 
         // Persist the cleaned order
         _projectConfig.ConversationOrder = Conversations.Select(c => c.Id).ToList();
@@ -180,6 +237,67 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
     {
         if (e.PropertyName == nameof(ConversationViewModel.IsRunning))
             OnChanged(nameof(IsRunning));
+        else if (e.PropertyName == nameof(ConversationViewModel.IsPinned))
+            ResortConversations();
+        else if (e.PropertyName == nameof(ConversationViewModel.Name))
+        {
+            // A rename can change whether the active filter matches this row.
+            // Cheap refresh — the view is already over an in-memory list.
+            if (HasConversationFilter) ConversationsView?.Refresh();
+            OnChanged(nameof(FilterMatchedNothing));
+        }
+    }
+
+    /// Stable sort by (IsPinned desc, original order). Pinned conversations
+    /// float to the top while the unpinned block keeps the order the user
+    /// curated on disk (ConversationOrder). Runs in-place on the existing
+    /// ObservableCollection via `Move` so WPF's ListBox keeps its item
+    /// containers and selection rather than tearing down the virtualized
+    /// list.
+    private bool _resorting;
+    private void ResortConversations()
+    {
+        if (_resorting) return;
+
+        // Scan for the first position where pinned/unpinned order is violated.
+        // The expected shape is: pinned prefix, then unpinned tail, with the
+        // internal order within each block unchanged. If we never see a
+        // pinned chip after an unpinned chip, the list is already sorted
+        // and we can skip the O(N²) Move loop + a ConfigStore save round-trip.
+        int n = Conversations.Count;
+        bool sawUnpinned = false;
+        bool needsSort = false;
+        for (int i = 0; i < n; i++)
+        {
+            if (Conversations[i].IsPinned)
+            {
+                if (sawUnpinned) { needsSort = true; break; }
+            }
+            else sawUnpinned = true;
+        }
+        if (!needsSort) return;
+
+        _resorting = true;
+        try
+        {
+            // Stable partition: pinned prefix retains its relative order,
+            // unpinned tail retains its relative order. Two Select+idx
+            // passes avoid the OrderBy allocation for a simple bool key.
+            var pinned = Conversations.Where(c => c.IsPinned).ToList();
+            var unpinned = Conversations.Where(c => !c.IsPinned).ToList();
+            var desired = new List<ConversationViewModel>(n);
+            desired.AddRange(pinned);
+            desired.AddRange(unpinned);
+            for (int i = 0; i < desired.Count; i++)
+            {
+                if (ReferenceEquals(Conversations[i], desired[i])) continue;
+                var from = Conversations.IndexOf(desired[i]);
+                if (from >= 0 && from != i) Conversations.Move(from, i);
+            }
+            _projectConfig.ConversationOrder = Conversations.Select(c => c.Id).ToList();
+            SaveProjectConfig();
+        }
+        finally { _resorting = false; }
     }
 
     private ConversationViewModel BuildConversationVM(string id)
@@ -291,6 +409,17 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
         return vm;
     }
 
+    /// Create a conversation pre-bound to an existing CLI session id so the
+    /// first Start/Send resumes that conversation instead of opening a new
+    /// one. Used by the "import session" UI to bring in a thread that was
+    /// started outside the app.
+    public ConversationViewModel ImportConversationWithSession(string sessionId)
+    {
+        var vm = AddConversation();
+        vm.ImportSessionId(sessionId);
+        return vm;
+    }
+
     public void RemoveConversation(ConversationViewModel vm)
     {
         if (vm == null || !Conversations.Contains(vm)) return;
@@ -318,6 +447,7 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
     public void Shutdown()
     {
         foreach (var c in Conversations.ToList()) c.Shutdown();
+        try { TerminalPanel?.Dispose(); } catch { }
         _projectConfig.LastConversationId = SelectedConversation?.Id;
         _projectConfig.ConversationOrder = Conversations.Select(c => c.Id).ToList();
         SaveProjectConfig();
