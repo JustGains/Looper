@@ -12,8 +12,13 @@ public sealed class TerminalSessionViewModel : INotifyPropertyChanged, IDisposab
 {
     public event PropertyChangedEventHandler? PropertyChanged;
     public event EventHandler? SessionExited;
+    public event EventHandler<ReadOnlyMemory<byte>>? Output;
 
     private readonly ConPtyTerminal _pty = new();
+    private readonly object _outputHistoryLock = new();
+    private readonly Queue<byte[]> _outputHistory = new();
+    private const int MaxOutputHistoryBytes = 2 * 1024 * 1024;
+    private int _outputHistoryBytes;
     private string _title;
     private bool _isActive;
     private bool _isRenaming;
@@ -47,18 +52,13 @@ public sealed class TerminalSessionViewModel : INotifyPropertyChanged, IDisposab
 
     public bool HasExited => _hasExited;
 
-    public event EventHandler<ReadOnlyMemory<byte>>? Output
-    {
-        add => _pty.Output += value;
-        remove => _pty.Output -= value;
-    }
-
     public TerminalSessionViewModel(string id, ShellProfile shell, string workingDirectory, string title)
     {
         Id = id;
         Shell = shell;
         WorkingDirectory = workingDirectory;
         _title = title;
+        _pty.Output += OnPtyOutput;
         _pty.Exited += (_, _) =>
         {
             _hasExited = true;
@@ -71,10 +71,57 @@ public sealed class TerminalSessionViewModel : INotifyPropertyChanged, IDisposab
         _pty.Start(WorkingDirectory, Shell.Exe, Shell.Args, cols, rows);
     }
 
+    public byte[] GetOutputHistorySnapshot()
+    {
+        lock (_outputHistoryLock)
+        {
+            if (_outputHistoryBytes == 0) return Array.Empty<byte>();
+            var snapshot = new byte[_outputHistoryBytes];
+            var offset = 0;
+            foreach (var chunk in _outputHistory)
+            {
+                Buffer.BlockCopy(chunk, 0, snapshot, offset, chunk.Length);
+                offset += chunk.Length;
+            }
+            return snapshot;
+        }
+    }
+
+    public void RecordOutputHistory(ReadOnlyMemory<byte> bytes) => AppendOutputHistory(bytes);
+
     public void Write(ReadOnlySpan<byte> bytes) => _pty.Write(bytes);
     public void Resize(int cols, int rows) => _pty.Resize(cols, rows);
 
     public void Dispose() => _pty.Dispose();
+
+    private void OnPtyOutput(object? sender, ReadOnlyMemory<byte> bytes)
+    {
+        AppendOutputHistory(bytes);
+        Output?.Invoke(this, bytes);
+    }
+
+    private void AppendOutputHistory(ReadOnlyMemory<byte> bytes)
+    {
+        if (bytes.IsEmpty) return;
+        var chunk = bytes.ToArray();
+        if (chunk.Length > MaxOutputHistoryBytes)
+        {
+            var trimmed = new byte[MaxOutputHistoryBytes];
+            Buffer.BlockCopy(chunk, chunk.Length - MaxOutputHistoryBytes, trimmed, 0, trimmed.Length);
+            chunk = trimmed;
+        }
+
+        lock (_outputHistoryLock)
+        {
+            _outputHistory.Enqueue(chunk);
+            _outputHistoryBytes += chunk.Length;
+            while (_outputHistoryBytes > MaxOutputHistoryBytes && _outputHistory.Count > 0)
+            {
+                var removed = _outputHistory.Dequeue();
+                _outputHistoryBytes -= removed.Length;
+            }
+        }
+    }
 
     private void OnChanged([CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

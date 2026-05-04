@@ -42,6 +42,13 @@ public sealed class ConversationSettings
     /// tasks above newer, short-lived exploratory conversations.
     public bool IsPinned { get; set; }
 
+    /// When true (default) the conversation uses the full Task Manager UI:
+    /// plan, tasks, streaming output, and the Model/Effort/Ralph/KeepContext
+    /// controls. When false, the UI collapses to a single full-window terminal
+    /// running the selected tool's yolo command (e.g. claude
+    /// --dangerously-skip-permissions).
+    public bool IsTaskManagerEnabled { get; set; } = true;
+
     /// Map of short `@label` (the portion after '@', e.g. "WorkoutScreen.tsx"
     /// or "workout/WorkoutScreen.tsx" for disambiguation) → full relative path.
     /// The TextBox stores `@label`; the loop runner submits the expanded form.

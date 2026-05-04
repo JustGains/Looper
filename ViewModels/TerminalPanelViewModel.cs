@@ -61,12 +61,20 @@ public sealed class TerminalPanelViewModel : INotifyPropertyChanged, IDisposable
     public ICommand CloseActiveSessionCommand { get; }
 
     /// Opens a new session using the default shell. Returns it.
-    public TerminalSessionViewModel AddSession() => AddSession(null);
+    public TerminalSessionViewModel AddSession() => AddSession((string?)null);
 
     /// Opens a new session using a specific shell id (or default if null).
     public TerminalSessionViewModel AddSession(string? shellId)
     {
         var shell = ShellDetector.Resolve(shellId ?? _defaultShellIdProvider());
+        return AddSession(shell);
+    }
+
+    /// Opens a new session using an explicit shell profile, bypassing
+    /// <see cref="ShellDetector"/>. Used for spawning CLI-as-shell sessions
+    /// (Claude/Codex/Pi yolo mode) where the "shell" is the agent CLI itself.
+    public TerminalSessionViewModel AddSession(ShellProfile shell)
+    {
         var cwd = _workingDirectoryProvider();
         if (string.IsNullOrWhiteSpace(cwd)) cwd = Environment.CurrentDirectory;
         var id = Guid.NewGuid().ToString("N");

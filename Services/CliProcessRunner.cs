@@ -187,13 +187,11 @@ public sealed class CliProcessRunner
                     // resumes the CLI's global most-recent (= another conv).
                     a.Add("resume");
                     a.Add("--dangerously-bypass-approvals-and-sandbox");
-                    a.Add("--skip-git-repo-check");
                     a.Add(effectiveSessionId);
                 }
                 else
                 {
                     a.Add("--dangerously-bypass-approvals-and-sandbox");
-                    a.Add("--skip-git-repo-check");
                     a.Add("--color");
                     a.Add("never");
                     if (!string.IsNullOrWhiteSpace(s.CodexModel))

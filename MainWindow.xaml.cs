@@ -29,6 +29,13 @@ public partial class MainWindow : Window
     private bool _terminalHostReady;
     private ProjectViewModel? _terminalAttachedProject;
 
+    // Yolo full-window terminal: a second WebView2 + TerminalHost dedicated
+    // to the per-conversation yolo CLI session. Re-attached to the active
+    // conversation's YoloPanel whenever SelectedConversation changes.
+    private TerminalHost? _yoloTerminalHost;
+    private bool _yoloTerminalHostReady;
+    private ConversationViewModel? _yoloAttachedConversation;
+
     // @-mention state
     private readonly Dictionary<string, FileMentionIndex> _mentionIndexes = new(StringComparer.OrdinalIgnoreCase);
     private int _mentionTokenStart = -1; // position of '@' in the PromptBox when popup is active
@@ -75,12 +82,14 @@ public partial class MainWindow : Window
             AttachMentionHighlightAdorner();
             UpdateActivityBarStyles();
             _ = InitializeTerminalHostAsync();
+            _ = InitializeYoloTerminalHostAsync();
         };
 
         Closing += (_, _) => _vm.SaveWindowBounds(Left, Top, Width, Height);
         Closed += (_, _) =>
         {
             try { _terminalHost?.Dispose(); } catch { }
+            try { _yoloTerminalHost?.Dispose(); } catch { }
             _vm.Shutdown();
         };
     }
@@ -233,6 +242,7 @@ public partial class MainWindow : Window
         _subscribedConversation = _vm.SelectedProject?.SelectedConversation;
         if (_subscribedConversation != null)
             _subscribedConversation.PropertyChanged += OnSelectedConversationPropertyChanged;
+        AttachYoloConversationTerminal();
     }
 
     private void OnSelectedConversationPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -242,6 +252,15 @@ public partial class MainWindow : Window
             or nameof(ConversationViewModel.TaskPreviewMarkdown))
         {
             QueueScrollTasks();
+        }
+        else if (e.PropertyName == nameof(ConversationViewModel.IsTaskManagerEnabled))
+        {
+            // Toggling into yolo mode — make sure the attached panel actually
+            // has a session running. EnsureYoloSession is idempotent.
+            if (_subscribedConversation?.IsYoloModeEnabled == true)
+                _subscribedConversation.EnsureYoloSession();
+            AttachYoloConversationTerminal();
+            _yoloTerminalHost?.FocusActive();
         }
     }
 
@@ -378,6 +397,46 @@ public partial class MainWindow : Window
         if (ReferenceEquals(project, _terminalAttachedProject)) return;
         _terminalAttachedProject = project;
         _terminalHost.AttachPanel(project?.TerminalPanel);
+    }
+
+    // ---- yolo terminal panel (dedicated WebView2 for Task Manager-off mode) ----
+
+    private async Task InitializeYoloTerminalHostAsync()
+    {
+        if (_yoloTerminalHost != null) return;
+        _yoloTerminalHost = new TerminalHost(YoloTerminalWebView);
+        try
+        {
+            await _yoloTerminalHost.InitializeAsync();
+            _yoloTerminalHostReady = true;
+            AttachYoloConversationTerminal();
+        }
+        catch
+        {
+            // WebView2 runtime not installed — yolo mode will fail soft.
+        }
+    }
+
+    private void AttachYoloConversationTerminal()
+    {
+        if (!_yoloTerminalHostReady || _yoloTerminalHost == null) return;
+        var conv = _vm.SelectedProject?.SelectedConversation;
+        if (ReferenceEquals(conv, _yoloAttachedConversation)) return;
+        _yoloAttachedConversation = conv;
+        _yoloTerminalHost.AttachPanel(conv?.YoloPanel);
+        // First-time entry into yolo mode for this conversation kicks off the
+        // CLI session so the user lands in a live REPL instead of an empty
+        // pane. Idempotent — if a session is already running, this is a no-op.
+        if (conv?.IsYoloModeEnabled == true) conv.EnsureYoloSession();
+    }
+
+    private void YoloRestart_Click(object sender, RoutedEventArgs e)
+    {
+        var conv = _vm.SelectedProject?.SelectedConversation;
+        if (conv == null) return;
+        conv.CloseYoloSession();
+        conv.EnsureYoloSession();
+        _yoloTerminalHost?.FocusActive();
     }
 
     private TerminalPanelViewModel? ActiveTerminalPanel =>

@@ -76,6 +76,40 @@
         term.loadAddon(fit);
         term.open(container);
 
+        // Clipboard shortcuts. Ctrl+V / Ctrl+Shift+V → paste, Ctrl+Shift+C → copy.
+        // We return false to swallow the key so xterm doesn't also write a
+        // literal ^V to stdin. Returning false tells xterm "I handled this".
+        term.attachCustomKeyEventHandler((e) => {
+            if (e.type !== 'keydown') return true;
+            const ctrl = e.ctrlKey || e.metaKey;
+            if (!ctrl) return true;
+            const k = (e.key || '').toLowerCase();
+            if (k === 'v') {
+                pasteFromClipboard(term);
+                e.preventDefault();
+                return false;
+            }
+            if (e.shiftKey && k === 'c') {
+                copySelection(term);
+                e.preventDefault();
+                return false;
+            }
+            return true;
+        });
+
+        // Right-click: copy if there's a selection, otherwise paste.
+        // Default WebView2 context menus are disabled, so this is the only
+        // way for users to access mouse-driven clipboard actions.
+        container.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            const sel = term.getSelection();
+            if (sel && sel.length > 0) {
+                copySelection(term);
+            } else {
+                pasteFromClipboard(term);
+            }
+        });
+
         // Pump user input to the pty.
         term.onData(data => post({ type: 'stdin', id: id, data: data }));
         term.onBinary(data => post({ type: 'stdin', id: id, data: data }));
@@ -132,6 +166,21 @@
         const s = sessions.get(id);
         if (!s) return;
         s.term.clear();
+    }
+
+    function pasteFromClipboard(term) {
+        if (!navigator.clipboard || !navigator.clipboard.readText) return;
+        navigator.clipboard.readText().then(text => {
+            if (text) term.paste(text);
+        }).catch(() => { /* permission denied or empty clipboard */ });
+    }
+
+    function copySelection(term) {
+        const sel = term.getSelection();
+        if (!sel) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(sel).catch(() => { });
+        }
     }
 
     function safeFit(entry) {

@@ -66,6 +66,16 @@ public sealed class TerminalHost : IDisposable
             "terminal.local", assetDir, CoreWebView2HostResourceAccessKind.Allow);
 
         core.WebMessageReceived += OnWebMessageReceived;
+        // Auto-grant clipboard read so navigator.clipboard.readText() works
+        // for Ctrl+V / right-click paste in xterm without prompting.
+        core.PermissionRequested += (_, args) =>
+        {
+            if (args.PermissionKind == CoreWebView2PermissionKind.ClipboardRead)
+            {
+                args.State = CoreWebView2PermissionState.Allow;
+                args.SavesInProfile = true;
+            }
+        };
         core.Navigate("http://terminal.local/index.html");
 
         _webViewReady = true;
@@ -164,6 +174,7 @@ public sealed class TerminalHost : IDisposable
         _outputHandlers[s.Id] = handler;
 
         Post(new { type = "create", id = s.Id });
+        ReplaySessionHistory(s);
 
         if (!started)
         {
@@ -172,10 +183,19 @@ public sealed class TerminalHost : IDisposable
             {
                 var msg = $"\r\n\x1b[31m[terminal] failed to start {s.Shell.Exe}: {ex.Message}\x1b[0m\r\n";
                 var bytes = Encoding.UTF8.GetBytes(msg);
+                s.RecordOutputHistory(bytes);
                 var b64 = Convert.ToBase64String(bytes);
                 Post(new { type = "stdout", id = s.Id, b64 });
             }
         }
+    }
+
+    private void ReplaySessionHistory(TerminalSessionViewModel s)
+    {
+        var history = s.GetOutputHistorySnapshot();
+        if (history.Length == 0) return;
+        var b64 = Convert.ToBase64String(history);
+        Post(new { type = "stdout", id = s.Id, b64 });
     }
 
     private void DetachSessionIO(TerminalSessionViewModel s)
@@ -202,7 +222,11 @@ public sealed class TerminalHost : IDisposable
                     // Page finished loading; replay any state queued during init.
                     if (_panel != null)
                     {
-                        foreach (var s in _panel.Sessions) Post(new { type = "create", id = s.Id });
+                        foreach (var s in _panel.Sessions)
+                        {
+                            Post(new { type = "create", id = s.Id });
+                            ReplaySessionHistory(s);
+                        }
                         if (_panel.ActiveSession != null)
                             Post(new { type = "activate", id = _panel.ActiveSession.Id });
                     }

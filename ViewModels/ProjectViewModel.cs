@@ -339,6 +339,10 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
             PiThinking = src.PiThinking,
             EnabledSkills = new List<string>(src.EnabledSkills),
             MentionMap = new Dictionary<string, string>(src.MentionMap, StringComparer.OrdinalIgnoreCase),
+            // Carry yolo-vs-task-manager mode through the fork. The forked
+            // conversation gets a fresh yolo session on first activation since
+            // interactive CLI REPLs aren't snapshottable.
+            IsTaskManagerEnabled = src.IsTaskManagerEnabled,
             // Key piece: next run forks from the parent's current session id.
             // Cleared automatically once the CLI captures the forked session's
             // new id.

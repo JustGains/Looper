@@ -2344,6 +2344,11 @@
                     </Button>
 
                     <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <CheckBox Margin="2,0,16,6" MinHeight="32" VerticalAlignment="Center"
+                                  Content="Task Manager"
+                                  IsChecked="{Binding IsTaskManagerEnabled}"
+                                  ToolTip="When off, the conversation collapses to a single full-window terminal running the selected tool's yolo command (claude --dangerously-skip-permissions, codex --dangerously-bypass-approvals-and-sandbox, pi). All planning/tasks/streaming UI is hidden."/>
+
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,6">
                             <Label Content="TOOL"/>
                             <ComboBox Width="124" Height="32"
@@ -2352,7 +2357,8 @@
                                       ItemTemplate="{StaticResource ToolOptionTemplate}"/>
                         </StackPanel>
 
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,6">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,6"
+                                    Visibility="{Binding IsTaskManagerEnabled, Converter={StaticResource BoolToVis}}">
                             <Label Content="MODEL"/>
                             <Button x:Name="ModelPickerButton"
                                     Width="200" Height="32"
@@ -2557,7 +2563,8 @@
                             </Popup>
                         </StackPanel>
 
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,6">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,6"
+                                    Visibility="{Binding IsTaskManagerEnabled, Converter={StaticResource BoolToVis}}">
                             <Label Content="EFFORT"/>
                             <ComboBox Width="96" Height="32" Style="{StaticResource EditableComboBox}"
                                       ItemsSource="{Binding EffortSuggestions}"
@@ -2565,8 +2572,21 @@
                                       ToolTip="low / medium / high / xhigh / max. Blank = CLI default."/>
                         </StackPanel>
 
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,6"
-                                    Visibility="{Binding IsPiTool, Converter={StaticResource BoolToVis}}">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,6">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding IsTaskManagerEnabled}" Value="True"/>
+                                                <Condition Binding="{Binding IsPiTool}" Value="True"/>
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
                             <Label Content="SKILLS"/>
                             <Button x:Name="SkillsButton"
                                     MinWidth="138" Height="32"
@@ -2699,10 +2719,24 @@
                         <CheckBox Margin="2,0,12,6" MinHeight="32" VerticalAlignment="Center"
                                   Content="Ralph"
                                   IsChecked="{Binding RalphEnabled}"
+                                  Visibility="{Binding IsTaskManagerEnabled, Converter={StaticResource BoolToVis}}"
                                   ToolTip="When off, each Start does exactly one pass (no looping). Max Iter is ignored."/>
 
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,6"
-                                    Visibility="{Binding RalphEnabled, Converter={StaticResource BoolToVis}}">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,6">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding IsTaskManagerEnabled}" Value="True"/>
+                                                <Condition Binding="{Binding RalphEnabled}" Value="True"/>
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
                             <Label Content="MAX ITER"/>
                             <Border BorderBrush="{StaticResource Border1}" BorderThickness="1"
                                     CornerRadius="4" Background="{StaticResource BgInput}"
@@ -2724,12 +2758,14 @@
                         <CheckBox Margin="2,0,0,6" MinHeight="32" VerticalAlignment="Center"
                                   IsChecked="{Binding KeepContext}"
                                   Content="Keep context"
+                                  Visibility="{Binding IsTaskManagerEnabled, Converter={StaticResource BoolToVis}}"
                                   ToolTip="Subsequent iterations resume the previous CLI session (Claude: --resume / Codex: exec resume). Both tools auto-compact when context grows large."/>
                     </WrapPanel>
                 </DockPanel>
             </Border>
 
-            <DockPanel x:Name="ConversationPromptPane" Grid.Row="1" Grid.Column="0">
+            <DockPanel x:Name="ConversationPromptPane" Grid.Row="1" Grid.Column="0"
+                       Visibility="{Binding IsTaskManagerEnabled, Converter={StaticResource BoolToVis}}">
                 <Border DockPanel.Dock="Top" Style="{StaticResource PaneHeaderBar}">
                     <DockPanel LastChildFill="False">
                         <StackPanel Orientation="Horizontal">
@@ -2842,7 +2878,8 @@
                 </Border>
             </DockPanel>
 
-            <GridSplitter x:Name="ConversationPaneSplitter" Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch" Background="{StaticResource Border1}"/>
+            <GridSplitter x:Name="ConversationPaneSplitter" Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch" Background="{StaticResource Border1}"
+                          Visibility="{Binding IsTaskManagerEnabled, Converter={StaticResource BoolToVis}}"/>
 
             <DockPanel x:Name="InlineGitDiffPanel"
                        Grid.Row="1" Grid.ColumnSpan="3"
@@ -2873,7 +2910,8 @@
                 </Border>
             </DockPanel>
 
-            <DockPanel x:Name="ConversationTasksPane" Grid.Row="1" Grid.Column="2">
+            <DockPanel x:Name="ConversationTasksPane" Grid.Row="1" Grid.Column="2"
+                       Visibility="{Binding IsTaskManagerEnabled, Converter={StaticResource BoolToVis}}">
                 <Border DockPanel.Dock="Top" Style="{StaticResource PaneHeaderBar}">
                     <DockPanel LastChildFill="True">
                         <StackPanel DockPanel.Dock="Right"
@@ -2975,11 +3013,13 @@
         </Grid>
 
         <GridSplitter Grid.Row="2" Grid.Column="2" Height="6"
-                      HorizontalAlignment="Stretch" Background="{StaticResource Border1}"/>
+                      HorizontalAlignment="Stretch" Background="{StaticResource Border1}"
+                      Visibility="{Binding SelectedProject.SelectedConversation.IsTaskManagerEnabled, Converter={StaticResource BoolToVis}}"/>
 
         <!-- ================= CONSOLE ================= -->
         <DockPanel Grid.Row="3" Grid.Column="2"
-                   DataContext="{Binding SelectedProject.SelectedConversation}">
+                   DataContext="{Binding SelectedProject.SelectedConversation}"
+                   Visibility="{Binding IsTaskManagerEnabled, Converter={StaticResource BoolToVis}}">
             <Border DockPanel.Dock="Top" Style="{StaticResource PaneHeaderBar}">
                 <DockPanel LastChildFill="True">
                     <!-- iteration / status / start-stop pinned to the right -->
@@ -3637,6 +3677,81 @@
                 </TabControl>
             </Border>
         </DockPanel>
+
+        <!-- ================= YOLO FULL-WINDOW TERMINAL =================
+             Shown in place of the prompt+tasks+console stack when the
+             conversation has Task Manager mode disabled. The WebView2 hosts
+             xterm.js bound (in code-behind) to SelectedConversation.YoloPanel
+             so each conversation owns its own dedicated CLI session. -->
+        <Grid Grid.Row="1" Grid.RowSpan="3" Grid.Column="2"
+              DataContext="{Binding SelectedProject.SelectedConversation}"
+              Visibility="{Binding IsYoloModeEnabled, Converter={StaticResource BoolToVis}}">
+            <Border Background="#1a1c1e"
+                    BorderBrush="{StaticResource Border1}" BorderThickness="1"
+                    CornerRadius="6" Margin="0,0,0,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Border Grid.Row="0" Background="#202225"
+                            BorderBrush="{StaticResource Border1}" BorderThickness="0,0,0,1"
+                            Padding="10,4">
+                        <DockPanel LastChildFill="True">
+                             <TextBlock DockPanel.Dock="Left"
+                                        Text="YOLO TERMINAL"
+                                        Foreground="{StaticResource FgAccent}"
+                                        FontFamily="Cascadia Code, Cascadia Mono, Consolas"
+                                        FontSize="10"
+                                        VerticalAlignment="Center"/>
+                            <!-- Keep the mode + agent controls on the left in
+                                 Task Manager-off mode so they stay anchored
+                                 beside the terminal identity instead of
+                                 drifting into the utility actions. -->
+                            <StackPanel DockPanel.Dock="Left"
+                                        Orientation="Horizontal"
+                                        VerticalAlignment="Center"
+                                        Margin="12,0,0,0">
+                                <CheckBox Content="Task Manager"
+                                          IsChecked="{Binding IsTaskManagerEnabled}"
+                                          VerticalAlignment="Center"
+                                          Margin="0,0,12,0"
+                                          ToolTip="Re-enable the full Task Manager UI for this conversation."/>
+                                <Label Content="AGENT"
+                                       FontSize="9"
+                                       Padding="0"
+                                       Margin="0,0,6,0"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource FgDim}"/>
+                                <ComboBox Width="124" Height="24"
+                                          VerticalAlignment="Center"
+                                          ItemsSource="{Binding ToolOptions}"
+                                          SelectedItem="{Binding SelectedToolOption}"
+                                          ItemTemplate="{StaticResource ToolOptionTemplate}"
+                                          ToolTip="Switch the agent CLI. The yolo session respawns into the new tool."/>
+                            </StackPanel>
+                            <TextBlock DockPanel.Dock="Left"
+                                       Text="{Binding SelectedToolOption.Name, StringFormat='— {0} (yolo)'}"
+                                       Foreground="{StaticResource FgDim}"
+                                       FontSize="10"
+                                       Margin="10,0,0,0"
+                                       VerticalAlignment="Center"/>
+                            <Button DockPanel.Dock="Right"
+                                    Style="{StaticResource FlatButton}"
+                                    MinWidth="0" Padding="6,2" Height="22"
+                                    Margin="8,0,0,0"
+                                    Click="YoloRestart_Click"
+                                    ToolTip="Restart the yolo terminal, resuming this conversation's saved session when one is available">
+                                <TextBlock Text="restart" FontSize="10" VerticalAlignment="Center"/>
+                            </Button>
+                            <TextBlock/>
+                        </DockPanel>
+                    </Border>
+                    <wv2:WebView2 x:Name="YoloTerminalWebView" Grid.Row="1"
+                                  DefaultBackgroundColor="#1a1c1e"/>
+                </Grid>
+            </Border>
+        </Grid>
 
         <!-- ================= STATUS BAR ================= -->
         <!-- Single inline row: no card surface, no border. Padding collapsed

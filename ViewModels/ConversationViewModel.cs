@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Windows;
 using System.Windows.Documents;
 using System.Windows.Threading;
@@ -143,6 +144,25 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
 
     private readonly Action _persistSettings;
 
+    // Yolo mode (Task Manager checkbox unchecked): one terminal panel per
+    // conversation, holding a single session that runs the selected tool's
+    // interactive yolo command directly. Created lazily on first toggle.
+    private TerminalPanelViewModel? _yoloPanel;
+    private TerminalSessionViewModel? _yoloSession;
+    private CliTool _yoloSessionTool;
+    private SessionFileWatcher? _yoloSessionWatcher;
+    private DispatcherTimer? _yoloBusyTimer;
+    private bool _yoloBusy;
+    // Output sliding window used to detect "couldn't resume session" errors
+    // before the agent exits — when the next exit fires we drop the dead
+    // session id and respawn fresh instead of looping on a stale --resume.
+    private readonly StringBuilder _yoloRecentOutput = new();
+    private bool _yoloResumeFailureSeen;
+    private DateTime _yoloLastStartUtc = DateTime.MinValue;
+    private int _yoloConsecutiveQuickExits;
+    private const int YoloMaxConsecutiveQuickExits = 3;
+    private static readonly TimeSpan YoloQuickExitWindow = TimeSpan.FromSeconds(2);
+
     public string Id => _settings.Id;
     public string WorkingDirectory => _workingDirectory;
     public string PromptFile => ConversationStore.PromptFile(_workingDirectory, Id);
@@ -189,6 +209,29 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     }
     public void TogglePin() => IsPinned = !IsPinned;
 
+    /// When true (default) the conversation uses the full Task Manager UI:
+    /// plan, tasks, streaming output, and the Model/Effort/Ralph/KeepContext
+    /// controls. When false, the UI collapses to a single full-window terminal
+    /// that runs the selected tool's interactive yolo command (e.g.
+    /// `claude --dangerously-skip-permissions`). Switching modes spawns/kills
+    /// the per-conversation yolo terminal session.
+    public bool IsTaskManagerEnabled
+    {
+        get => _settings.IsTaskManagerEnabled;
+        set
+        {
+            if (_settings.IsTaskManagerEnabled == value) return;
+            _settings.IsTaskManagerEnabled = value;
+            PersistSettings();
+            OnChanged();
+            OnChanged(nameof(IsYoloModeEnabled));
+            if (!value) EnsureYoloSession();
+            else CloseYoloSession();
+        }
+    }
+
+    public bool IsYoloModeEnabled => !IsTaskManagerEnabled;
+
     private bool _isEditingName;
     public bool IsEditingName
     {
@@ -231,6 +274,10 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
                 nameof(ModelSuggestions),
                 nameof(EffortSuggestions),
                 nameof(IsPiTool));
+            // In yolo mode the running CLI is the session itself — switching
+            // tool means respawning so the new tool's interactive REPL takes
+            // over the terminal.
+            if (!IsTaskManagerEnabled) EnsureYoloSession();
         }
     }
 
@@ -546,7 +593,10 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     private bool _isRunning;
     public bool IsRunning
     {
-        get => _isRunning;
+        // Sidebar busy dot lights up for either the LoopRunner-driven task
+        // manager mode OR the debounced output-activity signal from the yolo
+        // terminal — both represent "this conversation is doing something".
+        get => _isRunning || _yoloBusy;
         private set
         {
             if (_isRunning == value) return;
@@ -1703,6 +1753,300 @@ Hard rules for this turn:
         _tasksFile.Dispose();
         _promptStore.Dispose();
         _consoleLog.Dispose();
+        _yoloBusyTimer?.Stop();
+        _yoloSessionWatcher?.Dispose();
+        _yoloSessionWatcher = null;
+        try { _yoloPanel?.Dispose(); } catch { }
+        _yoloPanel = null;
+        _yoloSession = null;
+    }
+
+    /// Yolo-mode terminal panel for this conversation. Lazily built the first
+    /// time the conversation enters yolo mode (Task Manager unchecked) and
+    /// disposed in <see cref="Shutdown"/>. The panel hosts exactly one session
+    /// running the selected tool's interactive yolo command.
+    public TerminalPanelViewModel YoloPanel
+    {
+        get
+        {
+            if (_yoloPanel == null)
+            {
+                _yoloPanel = new TerminalPanelViewModel(
+                    workingDirectoryProvider: () => _workingDirectory,
+                    defaultShellIdProvider: () => null);
+            }
+            return _yoloPanel;
+        }
+    }
+
+    /// Idempotently ensures a yolo CLI session is running for the current
+    /// <see cref="Tool"/>. If a stale session for the wrong tool exists it's
+    /// closed and replaced. Safe to call repeatedly (e.g. on tool change).
+    public void EnsureYoloSession()
+    {
+        var panel = YoloPanel;
+        if (_yoloSession != null && !_yoloSession.HasExited && _yoloSessionTool == Tool)
+        {
+            panel.ActiveSession = _yoloSession;
+            return;
+        }
+        CloseYoloSession();
+        var profile = YoloProfileFor(Tool, _currentSessionId);
+        try
+        {
+            StartYoloSessionCapture(Tool);
+            _yoloRecentOutput.Clear();
+            _yoloResumeFailureSeen = false;
+            _yoloLastStartUtc = DateTime.UtcNow;
+            _yoloSession = panel.AddSession(profile);
+            _yoloSessionTool = Tool;
+            // Drive the sidebar busy indicator from output activity. A short
+            // debounce keeps the dot lit during a streaming response and lets
+            // it go dark once the agent stops printing.
+            _yoloSession.Output += OnYoloOutput;
+            _yoloSession.SessionExited += OnYoloSessionExited;
+        }
+        catch
+        {
+            // Spawn failures (CLI not installed) surface as a stderr banner
+            // in the WebView2 via TerminalHost — nothing to do here.
+        }
+    }
+
+    /// Closes the current yolo session if any. Called when the user re-enables
+    /// Task Manager mode or switches tools while in yolo mode.
+    public void CloseYoloSession()
+    {
+        var panel = _yoloPanel;
+        var session = _yoloSession;
+        _yoloSession = null;
+        _yoloSessionWatcher?.Dispose();
+        _yoloSessionWatcher = null;
+        SetYoloBusy(false);
+        if (session != null)
+        {
+            session.Output -= OnYoloOutput;
+            session.SessionExited -= OnYoloSessionExited;
+            try { panel?.CloseSession(session); } catch { }
+        }
+    }
+
+    private void OnYoloOutput(object? sender, ReadOnlyMemory<byte> bytes)
+    {
+        // Sniff for "couldn't resume" errors so we can drop the dead session
+        // id when the agent exits. We only need a small rolling window — these
+        // errors print once near the top of the session before the agent
+        // bails. Decoding inline is fine since this runs at PTY-output rate.
+        if (!_yoloResumeFailureSeen && bytes.Length > 0)
+        {
+            try
+            {
+                var text = Encoding.UTF8.GetString(bytes.Span);
+                _yoloRecentOutput.Append(text);
+                if (_yoloRecentOutput.Length > 4096)
+                    _yoloRecentOutput.Remove(0, _yoloRecentOutput.Length - 4096);
+                if (LooksLikeResumeFailure(_yoloRecentOutput))
+                    _yoloResumeFailureSeen = true;
+            }
+            catch { }
+        }
+
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+        dispatcher.BeginInvoke(() =>
+        {
+            SetYoloBusy(true);
+            if (_yoloBusyTimer == null)
+            {
+                _yoloBusyTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
+                _yoloBusyTimer.Tick += (_, _) =>
+                {
+                    _yoloBusyTimer!.Stop();
+                    SetYoloBusy(false);
+                };
+            }
+            _yoloBusyTimer.Stop();
+            _yoloBusyTimer.Start();
+        });
+    }
+
+    private void OnYoloSessionExited(object? sender, EventArgs _)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+        dispatcher.BeginInvoke(() =>
+        {
+            SetYoloBusy(false);
+            var ranFor = DateTime.UtcNow - _yoloLastStartUtc;
+            var resumeFailure = _yoloResumeFailureSeen;
+            if (ReferenceEquals(sender, _yoloSession)) _yoloSession = null;
+
+            // Only auto-restart if we're still in yolo mode for this conversation.
+            if (!IsYoloModeEnabled) return;
+
+            // Resume failure → drop the dead id and try fresh exactly once.
+            if (resumeFailure)
+            {
+                CurrentSessionId = null;
+                _yoloResumeFailureSeen = false;
+                _yoloConsecutiveQuickExits = 0;
+                EnsureYoloSession();
+                return;
+            }
+
+            // Crash-loop guard: if the agent keeps dying within ~2s of spawn,
+            // stop respawning so the user sees the failing terminal instead of
+            // pegging the CPU on a tight restart loop (e.g. CLI not installed).
+            if (ranFor < YoloQuickExitWindow)
+            {
+                _yoloConsecutiveQuickExits++;
+                if (_yoloConsecutiveQuickExits >= YoloMaxConsecutiveQuickExits)
+                    return;
+            }
+            else
+            {
+                _yoloConsecutiveQuickExits = 0;
+            }
+
+            EnsureYoloSession();
+        });
+    }
+
+    private static bool LooksLikeResumeFailure(StringBuilder buf)
+    {
+        // Compare lower-case to be tolerant of casing variation across CLIs.
+        // Patterns observed: claude prints "No conversation found with session
+        // ID:"; codex/pi print similar "session not found" / "could not
+        // resume" messages. We match any of them.
+        var s = buf.ToString().ToLowerInvariant();
+        return s.Contains("no conversation found with session")
+            || s.Contains("session not found")
+            || s.Contains("could not resume")
+            || s.Contains("cannot resume")
+            || s.Contains("unable to resume");
+    }
+
+    private void StartYoloSessionCapture(CliTool tool)
+    {
+        _yoloSessionWatcher?.Dispose();
+        _yoloSessionWatcher = CreateYoloSessionWatcher(tool);
+        if (_yoloSessionWatcher == null) return;
+
+        _yoloSessionWatcher.SessionIdCaptured += (_, sid) =>
+        {
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher == null) return;
+            dispatcher.BeginInvoke(() =>
+            {
+                if (!string.IsNullOrWhiteSpace(sid))
+                    CurrentSessionId = sid;
+            });
+        };
+        _yoloSessionWatcher.Start();
+    }
+
+    private SessionFileWatcher? CreateYoloSessionWatcher(CliTool tool)
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var cwdKey = EncodeSessionPathKey(_workingDirectory);
+
+        return tool switch
+        {
+            CliTool.ClaudeCode => new SessionFileWatcher(
+                Path.Combine(home, ".claude", "projects"),
+                path => path.IndexOf(cwdKey, StringComparison.OrdinalIgnoreCase) >= 0),
+            CliTool.Codex => new SessionFileWatcher(
+                Path.Combine(home, ".codex", "sessions")),
+            CliTool.Pi => new SessionFileWatcher(
+                Path.Combine(home, ".pi", "agent", "sessions"),
+                path => path.IndexOf($"--{cwdKey}--", StringComparison.OrdinalIgnoreCase) >= 0),
+            _ => null,
+        };
+    }
+
+    private static string EncodeSessionPathKey(string path)
+    {
+        var normalized = Path.GetFullPath(path)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var chars = normalized.Select(ch =>
+            ch == ':' || ch == Path.DirectorySeparatorChar || ch == Path.AltDirectorySeparatorChar
+                ? '-'
+                : ch).ToArray();
+        return new string(chars);
+    }
+
+    private void SetYoloBusy(bool value)
+    {
+        if (_yoloBusy == value) return;
+        _yoloBusy = value;
+        OnChanged(nameof(IsRunning));
+    }
+
+    /// Builds the CLI invocation for yolo mode. We launch through `cmd.exe /C`
+    /// so Windows resolves npm `.cmd` shims (claude/codex/pi are installed as
+    /// .cmd wrappers) without us having to walk PATH ourselves. /C exits cmd
+    /// when the agent exits, which gives the conversation a clean exit signal
+    /// to drive auto-restart in <see cref="OnYoloSessionExited"/>.
+    private static ShellProfile YoloProfileFor(CliTool tool, string? sessionId)
+    {
+        var cmdExe = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
+        var resumeId = string.IsNullOrWhiteSpace(sessionId) ? null : sessionId.Trim();
+        var (id, label, args) = tool switch
+        {
+            CliTool.ClaudeCode => ("yolo-claude", "Claude Yolo", BuildClaudeYoloArgs(resumeId)),
+            CliTool.Codex      => ("yolo-codex",  "Codex Yolo",  BuildCodexYoloArgs(resumeId)),
+            CliTool.Pi         => ("yolo-pi",     "Pi Yolo",     BuildPiYoloArgs(resumeId)),
+            _                  => ("yolo-claude", "Claude Yolo", BuildClaudeYoloArgs(resumeId)),
+        };
+        var inner = string.Join(" ", args.Select(QuoteCmdArg));
+        return new ShellProfile(id, label, cmdExe, $"/C {inner}");
+    }
+
+    private static string[] BuildClaudeYoloArgs(string? sessionId)
+    {
+        var args = new List<string> { "claude", "--dangerously-skip-permissions" };
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            args.Add("--resume");
+            args.Add(sessionId);
+        }
+        return args.ToArray();
+    }
+
+    private static string[] BuildCodexYoloArgs(string? sessionId)
+    {
+        var args = new List<string> { "codex" };
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            args.Add("resume");
+            args.Add("--dangerously-bypass-approvals-and-sandbox");
+            args.Add(sessionId);
+        }
+        else
+        {
+            args.Add("--dangerously-bypass-approvals-and-sandbox");
+        }
+        return args.ToArray();
+    }
+
+    private static string[] BuildPiYoloArgs(string? sessionId)
+    {
+        var args = new List<string> { "pi" };
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            args.Add("--session");
+            args.Add(sessionId);
+        }
+        return args.ToArray();
+    }
+
+    private static string QuoteCmdArg(string arg)
+    {
+        if (arg.Length == 0) return "\"\"";
+        if (!arg.Any(ch => char.IsWhiteSpace(ch) || ch is '"' or '&' or '|' or '<' or '>' or '^'))
+            return arg;
+        return "\"" + arg.Replace("\"", "\\\"") + "\"";
     }
 
     public void Dispose() => Shutdown();

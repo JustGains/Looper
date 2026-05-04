@@ -666,7 +666,7 @@ public sealed class GitViewModel : INotifyPropertyChanged, IDisposable
                 break;
             case CliTool.Codex:
                 exe = "codex";
-                args = new List<string> { "exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--color", "never", "-" };
+                args = new List<string> { "exec", "--dangerously-bypass-approvals-and-sandbox", "--color", "never", "-" };
                 if (!string.IsNullOrWhiteSpace(s.CodexModel)) { args.Insert(args.Count - 1, "-m"); args.Insert(args.Count - 1, s.CodexModel); }
                 break;
             default: // Claude
