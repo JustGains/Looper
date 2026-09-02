@@ -88,6 +88,35 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
     /// True if any conversation is running. Used for the project tab header indicator.
     public bool IsRunning => Conversations.Any(c => c.IsRunning);
 
+    private bool _isRefreshingConversationTitles;
+    public bool IsRefreshingConversationTitles
+    {
+        get => _isRefreshingConversationTitles;
+        private set
+        {
+            if (_isRefreshingConversationTitles == value) return;
+            _isRefreshingConversationTitles = value;
+            OnChanged();
+        }
+    }
+
+    private string _conversationTitleRefreshStatus = "";
+    public string ConversationTitleRefreshStatus
+    {
+        get => _conversationTitleRefreshStatus;
+        private set
+        {
+            var v = value ?? "";
+            if (_conversationTitleRefreshStatus == v) return;
+            _conversationTitleRefreshStatus = v;
+            OnChanged();
+            OnChanged(nameof(HasConversationTitleRefreshStatus));
+        }
+    }
+
+    public bool HasConversationTitleRefreshStatus =>
+        !string.IsNullOrWhiteSpace(_conversationTitleRefreshStatus);
+
     /// Cached package.json discovery — refreshed on demand when the launch
     /// button is clicked so we don't rescan during steady-state use.
     private IReadOnlyList<PackageInfo>? _packages;
@@ -308,7 +337,8 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
             ConversationStore.SaveConversation(WorkingDirectory, cfg);
 
         var vm = new ConversationViewModel(WorkingDirectory, cfg,
-            persistSettings: () => ConversationStore.SaveConversation(WorkingDirectory, cfg));
+            persistSettings: () => ConversationStore.SaveConversation(WorkingDirectory, cfg),
+            appSettingsProvider: () => _shellDefaults);
         return vm;
     }
 
@@ -360,7 +390,8 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
                 ConversationStore.TasksFile(WorkingDirectory, cfg.Id));
 
         var vm = new ConversationViewModel(WorkingDirectory, cfg,
-            persistSettings: () => ConversationStore.SaveConversation(WorkingDirectory, cfg));
+            persistSettings: () => ConversationStore.SaveConversation(WorkingDirectory, cfg),
+            appSettingsProvider: () => _shellDefaults);
         Conversations.Add(vm);
         ConversationAdded?.Invoke(this, vm);
 
@@ -402,7 +433,8 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
         ConversationStore.SaveConversation(WorkingDirectory, cfg);
 
         var vm = new ConversationViewModel(WorkingDirectory, cfg,
-            persistSettings: () => ConversationStore.SaveConversation(WorkingDirectory, cfg));
+            persistSettings: () => ConversationStore.SaveConversation(WorkingDirectory, cfg),
+            appSettingsProvider: () => _shellDefaults);
         Conversations.Add(vm);
         ConversationAdded?.Invoke(this, vm);
 
@@ -422,6 +454,122 @@ public sealed class ProjectViewModel : INotifyPropertyChanged, IDisposable
         var vm = AddConversation();
         vm.ImportSessionId(sessionId);
         return vm;
+    }
+
+    public async Task RefreshConversationTitlesAsync()
+    {
+        if (IsRefreshingConversationTitles) return;
+        var apiKey = _shellDefaults.OpenRouterApiKey;
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            ConversationTitleRefreshStatus = "OpenRouter key not set";
+            return;
+        }
+
+        IsRefreshingConversationTitles = true;
+        ConversationTitleRefreshStatus = $"Refreshing 0/{Conversations.Count}...";
+        try
+        {
+            var model = _shellDefaults.OpenRouterTitleModel;
+            var list = Conversations.ToList();
+            int processed = 0, changed = 0, skipped = 0, failed = 0;
+            string? lastError = null;
+            foreach (var conversation in list)
+            {
+                processed++;
+                ConversationTitleRefreshStatus = $"Refreshing {processed}/{list.Count}...";
+
+                if (conversation.IsEditingName)
+                {
+                    skipped++;
+                    continue;
+                }
+                var context = BuildTitleRefreshContext(conversation);
+                if (string.IsNullOrWhiteSpace(context))
+                {
+                    skipped++;
+                    continue;
+                }
+
+                var (title, error) = await ConversationNamer.TryGenerateTitleAsync(apiKey, model, context);
+                if (!string.IsNullOrWhiteSpace(title))
+                {
+                    conversation.Name = title;
+                    changed++;
+                }
+                else
+                {
+                    failed++;
+                    if (!string.IsNullOrWhiteSpace(error)) lastError = error;
+                }
+            }
+
+            var status = $"Title refresh: {changed} changed, {skipped} skipped, {failed} failed";
+            if (failed > 0 && !string.IsNullOrWhiteSpace(lastError))
+                status += $" (last: {lastError})";
+            ConversationTitleRefreshStatus = status;
+        }
+        finally
+        {
+            IsRefreshingConversationTitles = false;
+        }
+    }
+
+    private static string BuildTitleRefreshContext(ConversationViewModel conversation)
+    {
+        var prompt = ReadPrefix(conversation.PromptFile, 800);
+        var tasks = ReadInterestingTaskLines(conversation.TasksFile, 500);
+        var yolo = conversation.IsYoloModeEnabled
+            ? conversation.GetRecentYoloTerminalText(900)
+            : "";
+        var parts = new List<string>(3);
+        if (!string.IsNullOrWhiteSpace(prompt))
+            parts.Add("Prompt:\n" + prompt.Trim());
+        if (!string.IsNullOrWhiteSpace(tasks))
+            parts.Add("Tasks excerpt:\n" + tasks.Trim());
+        if (!string.IsNullOrWhiteSpace(yolo))
+            parts.Add("Recent yolo terminal excerpt:\n" + yolo.Trim());
+        return string.Join("\n\n", parts);
+    }
+
+    private static string ReadPrefix(string path, int maxChars)
+    {
+        try
+        {
+            if (!File.Exists(path)) return "";
+            using var reader = new StreamReader(path);
+            var buffer = new char[maxChars + 1];
+            var read = reader.ReadBlock(buffer, 0, buffer.Length);
+            var text = new string(buffer, 0, Math.Min(read, maxChars));
+            return read > maxChars ? text + "..." : text;
+        }
+        catch { return ""; }
+    }
+
+    private static string ReadInterestingTaskLines(string path, int maxChars)
+    {
+        try
+        {
+            if (!File.Exists(path)) return "";
+            var lines = new List<string>();
+            foreach (var line in File.ReadLines(path))
+            {
+                var t = line.Trim();
+                if (t.Length == 0) continue;
+                if (!(t.StartsWith("#", StringComparison.Ordinal)
+                    || t.StartsWith("- [", StringComparison.Ordinal)
+                    || t.StartsWith("-", StringComparison.Ordinal)))
+                    continue;
+
+                lines.Add(t);
+                var joined = string.Join("\n", lines);
+                if (joined.Length >= maxChars)
+                    return joined.Substring(0, maxChars).TrimEnd() + "...";
+                if (lines.Count >= 12) break;
+            }
+            return string.Join("\n", lines);
+        }
+        catch { return ""; }
     }
 
     public void RemoveConversation(ConversationViewModel vm)

@@ -13,6 +13,8 @@ namespace JustCode.Services;
 public static class ConversationStore
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
+    private const string DeletedMarkerFileName = ".deleted";
+    private const string DeletedConversationsDirName = "deleted-conversations";
 
     public static string LooperDir(string workingDirectory) =>
         Path.Combine(workingDirectory, ".looper");
@@ -22,6 +24,12 @@ public static class ConversationStore
 
     public static string ConversationsRoot(string workingDirectory) =>
         Path.Combine(LooperDir(workingDirectory), "conversations");
+
+    private static string DeletedConversationsRoot(string workingDirectory) =>
+        Path.Combine(LooperDir(workingDirectory), DeletedConversationsDirName);
+
+    private static string DeletedConversationMarkerFile(string workingDirectory, string conversationId) =>
+        Path.Combine(DeletedConversationsRoot(workingDirectory), Uri.EscapeDataString(conversationId) + ".deleted");
 
     public static string ConversationDir(string workingDirectory, string conversationId) =>
         Path.Combine(ConversationsRoot(workingDirectory), conversationId);
@@ -97,10 +105,45 @@ public static class ConversationStore
     {
         try
         {
+            MarkConversationDeleted(workingDirectory, id);
+
             var dir = ConversationDir(workingDirectory, id);
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+            if (!IsSafeConversationDir(workingDirectory, dir)) return;
+            if (!Directory.Exists(dir)) return;
+
+            try { File.WriteAllText(Path.Combine(dir, DeletedMarkerFileName), DateTime.UtcNow.ToString("O")); }
+            catch { }
+
+            for (int i = 0; i < 3; i++)
+            {
+                try
+                {
+                    Directory.Delete(dir, recursive: true);
+                    return;
+                }
+                catch
+                {
+                    if (i < 2) System.Threading.Thread.Sleep(75);
+                }
+            }
         }
         catch { }
+    }
+
+    private static void MarkConversationDeleted(string workingDirectory, string id)
+    {
+        try
+        {
+            Directory.CreateDirectory(DeletedConversationsRoot(workingDirectory));
+            File.WriteAllText(DeletedConversationMarkerFile(workingDirectory, id), DateTime.UtcNow.ToString("O"));
+        }
+        catch { }
+    }
+
+    private static bool IsConversationDeleted(string workingDirectory, string id)
+    {
+        try { return File.Exists(DeletedConversationMarkerFile(workingDirectory, id)); }
+        catch { return false; }
     }
 
     public static List<string> EnumerateConversationIds(string workingDirectory)
@@ -112,6 +155,8 @@ public static class ConversationStore
             return Directory.EnumerateDirectories(root)
                 .Select(d => Path.GetFileName(d)!)
                 .Where(n => !string.IsNullOrEmpty(n))
+                .Where(n => !IsConversationDeleted(workingDirectory, n))
+                .Where(n => !File.Exists(Path.Combine(ConversationDir(workingDirectory, n), DeletedMarkerFileName)))
                 .ToList();
         }
         catch { return new List<string>(); }
@@ -134,6 +179,22 @@ public static class ConversationStore
     {
         // compact timestamp-based id: yyyyMMdd-HHmmss-xxx
         return $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N").Substring(0, 4)}";
+    }
+
+    private static bool IsSafeConversationDir(string workingDirectory, string dir)
+    {
+        try
+        {
+            var root = Path.GetFullPath(ConversationsRoot(workingDirectory))
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+            var full = Path.GetFullPath(dir)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+            return full.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+                && full.Length > root.Length;
+        }
+        catch { return false; }
     }
 
     /// If the project has legacy `.looper/prompt.txt` / `.looper/tasks.md`
@@ -180,5 +241,6 @@ public static class ConversationStore
         ClaudeEffort = defaults.ClaudeEffort,
         CodexModel = defaults.CodexModel,
         CodexEffort = defaults.CodexEffort,
+        IsTaskManagerEnabled = false,
     };
 }

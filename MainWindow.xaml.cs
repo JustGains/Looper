@@ -126,11 +126,15 @@ public partial class MainWindow : Window
     {
         c.ConsoleAppend -= OnConversationConsoleAppend;
         c.ConsoleAppend += OnConversationConsoleAppend;
-        // Replay persisted console history once, on first hook, through the
-        // styling pipeline so it looks like the rest of the stream.
+        // Replay persisted console history once, on first hook. Goes straight
+        // through AppendStyled rather than the buffered streaming path so the
+        // FlowDocument is populated synchronously — the buffer's 16ms
+        // DispatcherTimer can sit unfired for seconds during startup while
+        // the UI thread is busy, which made non-selected tabs look empty
+        // until clicked.
         var history = c.PopConsoleHistory();
         if (!string.IsNullOrEmpty(history))
-            OnConversationConsoleAppend(c, history);
+            AppendStyled(c, history);
     }
 
     private void UnhookConversation(ConversationViewModel c)
@@ -377,6 +381,11 @@ public partial class MainWindow : Window
     {
         if (_terminalHost != null) return;
         _terminalHost = new TerminalHost(TerminalWebView);
+        // User-tunable fallback shell priority for AddSession recovery; the
+        // host iterates this list before walking the detected default order.
+        _terminalHost.FallbackShellOrder = () =>
+            (_vm.Settings.TerminalShellFallbackOrder ?? "")
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         try
         {
             await _terminalHost.InitializeAsync();
@@ -395,8 +404,84 @@ public partial class MainWindow : Window
         if (!_terminalHostReady || _terminalHost == null) return;
         var project = _vm.SelectedProject;
         if (ReferenceEquals(project, _terminalAttachedProject)) return;
+
+        // Drop the previous panel's header-status hooks before swapping.
+        if (_terminalAttachedProject?.TerminalPanel is { } previous)
+        {
+            ((System.Collections.Specialized.INotifyCollectionChanged)previous.Sessions)
+                .CollectionChanged -= OnHeaderPanelSessionsChanged;
+            previous.ActiveSessionChanged -= OnHeaderPanelActiveSessionChanged;
+        }
+
         _terminalAttachedProject = project;
         _terminalHost.AttachPanel(project?.TerminalPanel);
+
+        if (project?.TerminalPanel is { } next)
+        {
+            ((System.Collections.Specialized.INotifyCollectionChanged)next.Sessions)
+                .CollectionChanged += OnHeaderPanelSessionsChanged;
+            next.ActiveSessionChanged += OnHeaderPanelActiveSessionChanged;
+        }
+        UpdateTerminalHeaderStatus();
+    }
+
+    // The session whose Title we are currently mirroring into the header
+    // status — kept here so we can detach the PropertyChanged hook when the
+    // active session changes or the panel is swapped.
+    private TerminalSessionViewModel? _headerTitleSession;
+
+    private void OnHeaderPanelSessionsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        => UpdateTerminalHeaderStatus();
+
+    private void OnHeaderPanelActiveSessionChanged(object? sender, TerminalSessionViewModel s)
+        => UpdateTerminalHeaderStatus();
+
+    private void OnHeaderTitleSessionPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(TerminalSessionViewModel.Title))
+            UpdateTerminalHeaderStatus();
+    }
+
+    private void UpdateTerminalHeaderStatus()
+    {
+        if (TerminalHeaderStatus == null) return;
+        var panel = ActiveTerminalPanel;
+
+        // Re-bind the title-tracking hook to whichever session is now active.
+        var active = panel?.ActiveSession;
+        if (!ReferenceEquals(_headerTitleSession, active))
+        {
+            if (_headerTitleSession != null)
+                _headerTitleSession.PropertyChanged -= OnHeaderTitleSessionPropertyChanged;
+            _headerTitleSession = active;
+            if (_headerTitleSession != null)
+                _headerTitleSession.PropertyChanged += OnHeaderTitleSessionPropertyChanged;
+        }
+
+        if (panel == null || panel.Sessions.Count == 0)
+        {
+            TerminalHeaderStatus.Text = "";
+            return;
+        }
+        var count = panel.Sessions.Count;
+        var title = active?.Title;
+        var shell = active?.Shell.Label ?? "—";
+        // "3 sessions · my-build (pwsh)" — show the user's title (or auto-
+        // generated default) plus the underlying shell so two `pwsh` tabs are
+        // distinguishable. Falls back to bare shell label if the title equals
+        // the auto-generated `<Shell> (N)` form to avoid `pwsh (1) (pwsh)`.
+        string label;
+        if (string.IsNullOrEmpty(title) || title == shell)
+            label = shell;
+        else if (title.Contains($"({shell.ToLowerInvariant()})", StringComparison.OrdinalIgnoreCase)
+              || title.StartsWith(shell + " ", StringComparison.OrdinalIgnoreCase))
+            label = title; // already contains the shell
+        else
+            label = $"{title} ({shell})";
+
+        TerminalHeaderStatus.Text = count == 1
+            ? $"1 session · {label}"
+            : $"{count} sessions · {label}";
     }
 
     // ---- yolo terminal panel (dedicated WebView2 for Task Manager-off mode) ----
@@ -494,12 +579,143 @@ public partial class MainWindow : Window
                 item.Click += (_, _) => _vm.DefaultShellId = shell.Id;
                 menu.Items.Add(item);
             }
+            menu.Items.Add(new Separator());
+            var editFallback = new MenuItem { Header = "Edit fallback order…" };
+            editFallback.Click += (_, _) => OpenFallbackOrderEditor();
+            menu.Items.Add(editFallback);
         }
         menu.IsOpen = true;
     }
 
+    /// <summary>
+    /// Opens a small modal that lets the user edit
+    /// <c>TerminalShellFallbackOrder</c> as a comma-separated list. Lists
+    /// detected shells underneath the input as a hint. Saves on OK.
+    /// </summary>
+    private void OpenFallbackOrderEditor()
+    {
+        var dlg = new Window
+        {
+            Title = "Fallback shell order",
+            Owner = this,
+            Width = 500,
+            Height = 220,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = (System.Windows.Media.Brush)FindResource("BgSurface"),
+            Foreground = (System.Windows.Media.Brush)FindResource("FgPrimary"),
+            ShowInTaskbar = false,
+        };
+        var stack = new StackPanel { Margin = new Thickness(14) };
+        stack.Children.Add(new TextBlock
+        {
+            Text = "Comma-separated shell ids tried in order when the preferred shell fails to spawn.",
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 8),
+        });
+        var input = new TextBox
+        {
+            Text = _vm.TerminalShellFallbackOrder,
+            Margin = new Thickness(0, 0, 0, 8),
+            Padding = new Thickness(6, 4, 6, 4),
+        };
+        stack.Children.Add(input);
+        var detected = string.Join(", ", ShellDetector.Available.Select(s => s.Id));
+        stack.Children.Add(new TextBlock
+        {
+            Text = $"Detected: {(string.IsNullOrEmpty(detected) ? "(none)" : detected)}",
+            Foreground = (System.Windows.Media.Brush)FindResource("FgDim"),
+            FontSize = 11,
+            Margin = new Thickness(0, 0, 0, 12),
+        });
+        var btnRow = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
+        var cancel = new Button { Content = "Cancel", MinWidth = 72, Margin = new Thickness(0, 0, 8, 0), IsCancel = true };
+        var ok = new Button { Content = "Save", MinWidth = 72, IsDefault = true };
+        ok.Click += (_, _) =>
+        {
+            _vm.TerminalShellFallbackOrder = input.Text ?? "";
+            dlg.DialogResult = true;
+        };
+        btnRow.Children.Add(cancel);
+        btnRow.Children.Add(ok);
+        stack.Children.Add(btnRow);
+        dlg.Content = stack;
+        dlg.Loaded += (_, _) => input.Focus();
+        dlg.ShowDialog();
+    }
+
     private void TerminalClear_Click(object sender, RoutedEventArgs e)
         => _terminalHost?.ClearActive();
+
+    private void TerminalSaveOutput_Click(object sender, RoutedEventArgs e)
+    {
+        var panel = ActiveTerminalPanel;
+        var session = panel?.ActiveSession;
+        if (session == null) return;
+        var snapshot = session.GetOutputHistorySnapshot();
+        if (snapshot.Length == 0)
+        {
+            System.Windows.MessageBox.Show(
+                this,
+                "Terminal output is empty.",
+                "Save terminal output",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Information);
+            return;
+        }
+
+        // Replace path-hostile chars in the title so users with `<git-status>`
+        // or similar in their tab titles don't get blocked at SaveFileDialog.
+        var safeTitle = string.Concat((session.Title ?? "session")
+            .Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+        // Default suggested filename respects `TerminalSaveOutputLocalTime`:
+        // local users ("when did I run this?") get `yyyyMMdd'T'HHmmss`, the
+        // sortable-across-machines default sticks with UTC `…Z`.
+        var stamp = _vm.Settings.TerminalSaveOutputLocalTime
+            ? DateTime.Now.ToString("yyyyMMdd'T'HHmmss")
+            : DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'");
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            FileName = $"terminal-{safeTitle}-{stamp}.log",
+            // Filter index drives stripping: .log keeps the raw ANSI stream
+            // (highest fidelity); .txt strips escapes for grep-friendly output.
+            Filter = "Raw log with ANSI (*.log)|*.log|Plain text, ANSI stripped (*.txt)|*.txt|All files (*.*)|*.*",
+            DefaultExt = ".log",
+        };
+        if (dlg.ShowDialog(this) != true) return;
+        try
+        {
+            // FilterIndex is 1-based; 2 = "Plain text, ANSI stripped".
+            byte[] bytes;
+            if (dlg.FilterIndex == 2)
+            {
+                bytes = TerminalSessionViewModel.StripAnsi(snapshot, out var overflow);
+                if (overflow > 0)
+                {
+                    // First-time signal that a session has ever produced a
+                    // line longer than the 64 KiB line-buffer cap. Useful
+                    // signal during debugging that a no-newline runaway
+                    // stream actually exists in the wild.
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[terminal] StripAnsi dropped {overflow} byte(s) for session '{session.Title}' (line-buffer cap)");
+                }
+            }
+            else
+            {
+                bytes = snapshot;
+            }
+            File.WriteAllBytes(dlg.FileName, bytes);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(
+                this,
+                $"Failed to save terminal output:\n{ex.Message}",
+                "Save terminal output",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Error);
+        }
+    }
 
     private void TerminalCloseSession_Click(object sender, RoutedEventArgs e)
     {
@@ -514,14 +730,135 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+    // Drag-drop tab reorder state. Captured on left-mouse-down, consumed by
+    // PreviewMouseMove once the user drags past the system threshold.
+    private TerminalSessionViewModel? _terminalTabDragSource;
+    private System.Windows.Point _terminalTabDragOrigin;
+
     private void TerminalTab_MouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement fe || fe.Tag is not TerminalSessionViewModel s) return;
+
+        // Double-click on the tab opens the inline rename editor — matches
+        // Windows Terminal / VS Code muscle memory. Right-click still works
+        // as a discoverable secondary affordance.
+        if (e.ClickCount == 2)
+        {
+            s.IsRenaming = true;
+            e.Handled = true;
+            return;
+        }
+
+        // Record drag origin so PreviewMouseMove can decide whether the user
+        // intended a reorder vs. a click-to-activate. Cleared on drag start
+        // or on the next mouse-down.
+        _terminalTabDragSource = s;
+        _terminalTabDragOrigin = e.GetPosition(this);
+
+        var panel = ActiveTerminalPanel;
+        if (panel != null) panel.ActiveSession = s;
+        _terminalHost?.FocusActive();
+    }
+
+    private void TerminalTab_PreviewMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (e.LeftButton != System.Windows.Input.MouseButtonState.Pressed) return;
+        if (_terminalTabDragSource == null) return;
+        if (sender is not FrameworkElement fe) return;
+
+        var pos = e.GetPosition(this);
+        if (Math.Abs(pos.X - _terminalTabDragOrigin.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(pos.Y - _terminalTabDragOrigin.Y) < SystemParameters.MinimumVerticalDragDistance)
+            return;
+
+        var source = _terminalTabDragSource;
+        _terminalTabDragSource = null;
+        try
+        {
+            System.Windows.DragDrop.DoDragDrop(
+                fe,
+                new System.Windows.DataObject("TerminalTabSession", source),
+                System.Windows.DragDropEffects.Move);
+        }
+        catch { /* drag may fail mid-modal-popup; not worth surfacing */ }
+    }
+
+    private void TerminalTab_DragOver(object sender, System.Windows.DragEventArgs e)
+    {
+        var hasPayload = e.Data.GetDataPresent("TerminalTabSession");
+        e.Effects = hasPayload
+            ? System.Windows.DragDropEffects.Move
+            : System.Windows.DragDropEffects.None;
+
+        // Light up the indicator on the hovered tab; choose leading vs.
+        // trailing edge based on whether the cursor is past the tab's center.
+        // Clear any other tab's flag so only one indicator shows at a time.
+        if (hasPayload && sender is FrameworkElement fe && fe.Tag is TerminalSessionViewModel target)
+        {
+            var source = e.Data.GetData("TerminalTabSession") as TerminalSessionViewModel;
+            var pos = e.GetPosition(fe);
+            var dropAfter = fe.ActualWidth > 0 && pos.X > fe.ActualWidth / 2.0;
+            var panel = ActiveTerminalPanel;
+            if (panel != null)
+            {
+                foreach (var s in panel.Sessions)
+                {
+                    var isThis = !ReferenceEquals(s, source) && ReferenceEquals(s, target);
+                    s.IsDropTarget = isThis;
+                    if (isThis) s.DropAfter = dropAfter;
+                }
+            }
+        }
+        e.Handled = true;
+    }
+
+    private void TerminalTab_DragLeave(object sender, System.Windows.DragEventArgs e)
     {
         if (sender is FrameworkElement fe && fe.Tag is TerminalSessionViewModel s)
         {
-            var panel = ActiveTerminalPanel;
-            if (panel != null) panel.ActiveSession = s;
-            _terminalHost?.FocusActive();
+            s.IsDropTarget = false;
+            s.DropAfter = false;
         }
+    }
+
+    private void TerminalTab_Drop(object sender, System.Windows.DragEventArgs e)
+    {
+        // Capture indicator state before clearing — the leading/trailing
+        // decision was last computed in DragOver and lives on the target VM.
+        var panel = ActiveTerminalPanel;
+        var dropAfter = false;
+        if (sender is FrameworkElement feProbe && feProbe.Tag is TerminalSessionViewModel probeTarget)
+            dropAfter = probeTarget.DropAfter;
+        if (panel != null)
+            foreach (var s in panel.Sessions) { s.IsDropTarget = false; s.DropAfter = false; }
+
+        if (sender is not FrameworkElement fe || fe.Tag is not TerminalSessionViewModel target) return;
+        if (e.Data.GetData("TerminalTabSession") is not TerminalSessionViewModel source) return;
+        if (ReferenceEquals(source, target)) { e.Handled = true; return; }
+        if (panel == null) return;
+        var src = panel.Sessions.IndexOf(source);
+        var dst = panel.Sessions.IndexOf(target);
+        if (src < 0 || dst < 0) return;
+
+        // Trailing-edge drops mean "land after this tab". Adjust the index
+        // and account for the source slot's removal shifting later indices
+        // back by one when src < dst.
+        if (dropAfter) dst++;
+        if (src < dst) dst--;
+        if (src == dst) { e.Handled = true; return; }
+        panel.Sessions.Move(src, dst);
+        e.Handled = true;
+    }
+
+    private void TerminalTab_MiddleClick_Close(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        // Chromium-tab convention: middle-click closes. The left-button
+        // handler runs separately, so we filter to MiddleButton only and
+        // mark Handled to keep the activation path from firing.
+        if (e.ChangedButton != System.Windows.Input.MouseButton.Middle) return;
+        if (sender is FrameworkElement fe && fe.Tag is TerminalSessionViewModel s)
+            ActiveTerminalPanel?.CloseSession(s);
+        e.Handled = true;
     }
 
     private void TerminalTab_Rename_RightClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
@@ -547,6 +884,21 @@ public partial class MainWindow : Window
     {
         if (sender is TextBox tb && tb.Tag is TerminalSessionViewModel s)
             s.IsRenaming = false;
+    }
+
+    private void TerminalTab_TitleEdit_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        // When the rename TextBox becomes visible (IsRenaming flipped on),
+        // grab focus and select-all so typing immediately replaces the title.
+        if (sender is not TextBox tb) return;
+        if (e.NewValue is not bool visible || !visible) return;
+        // Defer to after layout so Focus actually lands — the TextBox is
+        // newly realized and won't take focus until it's measured.
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            tb.Focus();
+            tb.SelectAll();
+        }), System.Windows.Threading.DispatcherPriority.Input);
     }
 
     private void RestoreWindowBounds()
@@ -1334,6 +1686,23 @@ public partial class MainWindow : Window
         _vm.SelectedProject?.AddConversation();
     }
 
+    private async void RefreshConversationTitles_Click(object sender, RoutedEventArgs e)
+    {
+        var project = _vm.SelectedProject;
+        if (project == null) return;
+        if (string.IsNullOrWhiteSpace(_vm.OpenRouterApiKey))
+        {
+            ShowOpenRouterNamingDialog();
+            if (string.IsNullOrWhiteSpace(_vm.OpenRouterApiKey)) return;
+        }
+
+        try { await project.RefreshConversationTitlesAsync(); }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.ToString(), "Refresh conversation titles", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private void ClearConversationFilter_Click(object sender, RoutedEventArgs e)
     {
         _vm.SelectedProject?.ClearConversationFilter();
@@ -1923,7 +2292,134 @@ public partial class MainWindow : Window
         CloseSlashPopup();
     }
 
-    private void OpenConfig_Click(object sender, RoutedEventArgs e) => _vm.OpenConfigInNotepad();
+    private void SettingsMenu_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn) return;
+        var menu = new ContextMenu
+        {
+            PlacementTarget = btn,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+        };
+
+        var naming = new MenuItem { Header = $"OpenRouter naming ({_vm.OpenRouterApiKeyStatus})..." };
+        naming.Click += (_, _) => ShowOpenRouterNamingDialog();
+        menu.Items.Add(naming);
+
+        menu.Items.Add(new Separator());
+
+        var config = new MenuItem { Header = "Open looper.conf" };
+        config.Click += (_, _) => _vm.OpenConfigInNotepad();
+        menu.Items.Add(config);
+
+        menu.IsOpen = true;
+    }
+
+    private void ShowOpenRouterNamingDialog()
+    {
+        var dialog = new Window
+        {
+            Owner = this,
+            Title = "OpenRouter Naming",
+            Width = 500,
+            SizeToContent = SizeToContent.Height,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = new SolidColorBrush(Color.FromRgb(37, 37, 38)),
+            Foreground = new SolidColorBrush(Color.FromRgb(234, 234, 234)),
+        };
+
+        var root = new Grid { Margin = new Thickness(18) };
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        var intro = new TextBlock
+        {
+            Text = "Conversation tab names are generated through OpenRouter. The key is stored in the app config file.",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = new SolidColorBrush(Color.FromRgb(168, 168, 172)),
+            Margin = new Thickness(0, 0, 0, 14),
+        };
+        Grid.SetRow(intro, 0);
+        root.Children.Add(intro);
+
+        var keyPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
+        keyPanel.Children.Add(DialogLabel("API KEY"));
+        var keyBox = new PasswordBox
+        {
+            Password = _vm.OpenRouterApiKey,
+            Height = 30,
+            Background = new SolidColorBrush(Color.FromRgb(27, 27, 28)),
+            Foreground = new SolidColorBrush(Color.FromRgb(234, 234, 234)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(63, 63, 70)),
+            Padding = new Thickness(7, 4, 7, 4),
+        };
+        keyPanel.Children.Add(keyBox);
+        Grid.SetRow(keyPanel, 1);
+        root.Children.Add(keyPanel);
+
+        var modelPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 18) };
+        modelPanel.Children.Add(DialogLabel("MODEL CODE NAME"));
+        var modelBox = new ComboBox
+        {
+            IsEditable = true,
+            Height = 30,
+            Text = _vm.OpenRouterTitleModel,
+            Background = new SolidColorBrush(Color.FromRgb(27, 27, 28)),
+            Foreground = new SolidColorBrush(Color.FromRgb(234, 234, 234)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(63, 63, 70)),
+            Padding = new Thickness(7, 2, 7, 2),
+        };
+        modelBox.Items.Add(Models.LoopSettings.DefaultOpenRouterTitleModel);
+        modelPanel.Children.Add(modelBox);
+        Grid.SetRow(modelPanel, 2);
+        root.Children.Add(modelPanel);
+
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        var cancel = new Button
+        {
+            Content = "Cancel",
+            MinWidth = 76,
+            Margin = new Thickness(0, 0, 8, 0),
+            Padding = new Thickness(10, 5, 10, 5),
+            IsCancel = true,
+        };
+        var save = new Button
+        {
+            Content = "Save",
+            MinWidth = 76,
+            Padding = new Thickness(10, 5, 10, 5),
+            IsDefault = true,
+        };
+        save.Click += (_, _) =>
+        {
+            _vm.OpenRouterApiKey = keyBox.Password;
+            _vm.OpenRouterTitleModel = modelBox.Text;
+            _vm.SaveConfig();
+            dialog.DialogResult = true;
+        };
+        buttons.Children.Add(cancel);
+        buttons.Children.Add(save);
+        Grid.SetRow(buttons, 3);
+        root.Children.Add(buttons);
+
+        dialog.Content = root;
+        dialog.ShowDialog();
+    }
+
+    private static TextBlock DialogLabel(string text) => new()
+    {
+        Text = text,
+        FontSize = 10,
+        FontWeight = FontWeights.SemiBold,
+        Foreground = new SolidColorBrush(Color.FromRgb(118, 118, 124)),
+        Margin = new Thickness(0, 0, 0, 5),
+    };
 
     // ---------- Sidebar tabs (VS Code-style activity bar) ----------
 

@@ -12,6 +12,8 @@ public enum CliTool
 
 public sealed class LoopSettings
 {
+    public const string DefaultOpenRouterTitleModel = "google/gemini-2.5-flash";
+
     // Engine
     public CliTool Tool { get; set; } = CliTool.ClaudeCode;
     public int TimeoutSeconds { get; set; } = 120;
@@ -45,6 +47,21 @@ public sealed class LoopSettings
     /// Id of the default shell profile (see ShellDetector). Empty/unknown
     /// resolves to the first detected shell — pwsh > powershell > cmd.
     public string DefaultShellId { get; set; } = "";
+
+    /// When true, the "Save terminal output…" dialog suggests a local-time
+    /// timestamp (`yyyyMMdd'T'HHmmss`) instead of UTC. Default UTC matches
+    /// our other artifact filenames (clipboard PNGs, conversation dirs)
+    /// for lexical sortability across machines / DST boundaries.
+    public bool TerminalSaveOutputLocalTime { get; set; } = false;
+
+    /// Comma-separated shell ids tried in order when the user's preferred
+    /// shell fails to spawn (e.g. "pwsh,cmd,git-bash"). Empty defers to the
+    /// detected order. Consumed by <c>TerminalHost.FallbackShellOrder</c>.
+    public string TerminalShellFallbackOrder { get; set; } = "";
+
+    // OpenRouter-backed conversation naming.
+    public string OpenRouterApiKey { get; set; } = "";
+    public string OpenRouterTitleModel { get; set; } = DefaultOpenRouterTitleModel;
 
     // Window bounds
     public double? WindowLeft { get; set; }

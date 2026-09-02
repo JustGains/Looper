@@ -98,6 +98,71 @@
             <SolidColorBrush x:Key="Danger" Color="#b03030"/>
             <SolidColorBrush x:Key="DangerHover" Color="#cc3838"/>
 
+            <!-- Dedicated dark-toolbar CheckBox style. Default WPF template
+                 wraps the indicator in fixed margins that don't follow Padding,
+                 so the visual hit area drifts from the click target. This
+                 minimal template lets Padding do its job, keeps the indicator
+                 + label inline, and exposes mouse-over hover via Foreground
+                 with a single accent stroke for the check mark. -->
+            <Style x:Key="DarkToolbarCheckBox" TargetType="CheckBox">
+                <Setter Property="Foreground" Value="{StaticResource FgDim}"/>
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                <Setter Property="Padding" Value="6,3,6,3"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="VerticalContentAlignment" Value="Center"/>
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="CheckBox">
+                            <Border Background="{TemplateBinding Background}"
+                                    Padding="{TemplateBinding Padding}">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Border x:Name="Box" Width="12" Height="12"
+                                            Background="#14161a"
+                                            BorderBrush="#3a3a3f"
+                                            BorderThickness="1"
+                                            CornerRadius="2"
+                                            Margin="0,0,5,0"
+                                            VerticalAlignment="Center">
+                                        <Grid>
+                                            <Path x:Name="Mark"
+                                                  Data="M0,3 L2,5 L6,1"
+                                                  Stroke="{StaticResource Accent}"
+                                                  StrokeThickness="1.5"
+                                                  Visibility="Collapsed"
+                                                  VerticalAlignment="Center"
+                                                  HorizontalAlignment="Center"/>
+                                            <!-- Indeterminate visual: a centered horizontal bar, distinct
+                                                 from both the empty box and the check mark. -->
+                                            <Rectangle x:Name="IndetMark"
+                                                       Width="6" Height="2"
+                                                       Fill="{StaticResource Accent}"
+                                                       Visibility="Collapsed"
+                                                       VerticalAlignment="Center"
+                                                       HorizontalAlignment="Center"/>
+                                        </Grid>
+                                    </Border>
+                                    <ContentPresenter VerticalAlignment="Center"
+                                                      TextBlock.Foreground="{TemplateBinding Foreground}"/>
+                                </StackPanel>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="Mark" Property="Visibility" Value="Visible"/>
+                                </Trigger>
+                                <Trigger Property="IsChecked" Value="{x:Null}">
+                                    <Setter TargetName="IndetMark" Property="Visibility" Value="Visible"/>
+                                </Trigger>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Foreground" Value="{StaticResource FgPrimary}"/>
+                                    <Setter TargetName="Box" Property="BorderBrush" Value="#5a5a60"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
             <!-- ========== Pill design system — restrained, Apple-adjacent ========== -->
             <!-- Shared surface: barely lifted from toolbar, hairline border -->
             <SolidColorBrush x:Key="PillSurface" Color="#1f1f23"/>
@@ -1566,7 +1631,7 @@
                         <Border DockPanel.Dock="Top" Background="{StaticResource BgToolbar}"
                                 BorderBrush="{StaticResource Border2}" BorderThickness="0,0,0,1"
                                 Padding="10,6">
-                            <DockPanel LastChildFill="False">
+                            <DockPanel LastChildFill="True">
                                 <TextBlock Style="{StaticResource PaneHeader}" Text="CONVERSATIONS"/>
                                 <Button DockPanel.Dock="Right" Click="AddConversation_Click"
                                         ToolTip="Add a new conversation"
@@ -1585,6 +1650,43 @@
                                                     <Setter TargetName="Bd" Property="Background" Value="#3a3a3f"/>
                                                     <Setter TargetName="G" Property="Foreground" Value="{StaticResource FgPrimary}"/>
                                                 </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                </Button>
+                                <Button DockPanel.Dock="Right"
+                                        Click="RefreshConversationTitles_Click"
+                                        ToolTip="{Binding ConversationTitleRefreshStatus, FallbackValue='Regenerate all conversation titles using short prompt/task excerpts'}"
+                                        Background="Transparent" BorderThickness="0"
+                                        Cursor="Hand" Padding="6,0" Width="22" Height="22"
+                                        Margin="0,0,2,0"
+                                        FocusVisualStyle="{x:Null}">
+                                    <Button.Style>
+                                        <Style TargetType="Button">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsRefreshingConversationTitles}" Value="True">
+                                                    <Setter Property="IsEnabled" Value="False"/>
+                                                    <Setter Property="Cursor" Value="Wait"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border x:Name="Bd" Background="Transparent" CornerRadius="3">
+                                                <TextBlock Text="⟳" FontSize="13" FontWeight="SemiBold"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                           Foreground="{StaticResource FgMuted}" x:Name="G"/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Bd" Property="Background" Value="#3a3a3f"/>
+                                                    <Setter TargetName="G" Property="Foreground" Value="{StaticResource FgPrimary}"/>
+                                                </Trigger>
+                                                <DataTrigger Binding="{Binding IsRefreshingConversationTitles}" Value="True">
+                                                    <Setter TargetName="G" Property="Foreground" Value="{StaticResource FgAccent}"/>
+                                                    <Setter TargetName="Bd" Property="Background" Value="#223142"/>
+                                                </DataTrigger>
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
                                     </Button.Template>
@@ -1612,6 +1714,14 @@
                                         </ControlTemplate>
                                     </Button.Template>
                                 </Button>
+                                <TextBlock Text="{Binding ConversationTitleRefreshStatus}"
+                                           Visibility="{Binding HasConversationTitleRefreshStatus, Converter={StaticResource BoolToVis}}"
+                                           Foreground="{StaticResource FgDim}"
+                                           FontSize="10"
+                                           VerticalAlignment="Center"
+                                           Margin="8,0,4,0"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding ConversationTitleRefreshStatus}"/>
                                 <Popup x:Name="ImportSessionPopup"
                                        PlacementTarget="{Binding ElementName=ImportSessionButton}"
                                        Placement="Bottom" VerticalOffset="4"
@@ -2338,8 +2448,8 @@
                     <Button DockPanel.Dock="Right" Style="{StaticResource FlatButton}"
                             MinWidth="32" Height="32" Padding="6,3"
                             VerticalAlignment="Top" Margin="8,0,0,6"
-                            Click="OpenConfig_Click"
-                            ToolTip="Open looper.conf in Notepad">
+                            Click="SettingsMenu_Click"
+                            ToolTip="Settings">
                         <TextBlock Text="⚙" FontSize="14" VerticalAlignment="Center"/>
                     </Button>
 
@@ -3536,10 +3646,16 @@
                                     Background="#17191b">
                                 <DockPanel LastChildFill="True" Margin="2,2,4,0">
                                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock x:Name="TerminalHeaderStatus"
+                                                   VerticalAlignment="Center"
+                                                   Margin="6,0,8,0"
+                                                   FontSize="10"
+                                                   Foreground="{StaticResource FgDim}"
+                                                   ToolTip="Open sessions and active shell"/>
                                         <Button Style="{StaticResource FlatButton}"
                                                 Click="TerminalAddSession_Click"
                                                 MinWidth="28" Padding="6,2" Margin="2,2,2,2"
-                                                ToolTip="New terminal (default shell)">
+                                                ToolTip="New terminal (default shell) — Ctrl+Shift+T">
                                             <TextBlock Text="＋" FontSize="14" FontWeight="SemiBold"/>
                                         </Button>
                                         <Button Style="{StaticResource FlatButton}"
@@ -3548,6 +3664,21 @@
                                                 ToolTip="Choose shell for new terminal">
                                             <TextBlock Text="▾" FontSize="11"/>
                                         </Button>
+                                        <Button Style="{StaticResource FlatButton}"
+                                                Click="TerminalSaveOutput_Click"
+                                                MinWidth="24" Padding="6,2" Margin="2,2,2,2"
+                                                ToolTip="Save active terminal output to a .log file"
+                                                Visibility="{Binding HasActiveSession, Converter={StaticResource BoolToVis}}">
+                                            <TextBlock Text="💾" FontSize="11"/>
+                                        </Button>
+                                        <CheckBox VerticalAlignment="Center"
+                                                  Margin="2,0,4,0"
+                                                  FontSize="10"
+                                                  Content="wall-clock filenames"
+                                                  Style="{StaticResource DarkToolbarCheckBox}"
+                                                  IsChecked="{Binding DataContext.TerminalSaveOutputLocalTime, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                  ToolTip="When checked, save-output filenames use the local wall-clock time. Off uses UTC, which sorts cleanly across timezones."
+                                                  Visibility="{Binding HasActiveSession, Converter={StaticResource BoolToVis}}"/>
                                         <Button Style="{StaticResource FlatButton}"
                                                 Click="TerminalClear_Click"
                                                 MinWidth="52" Padding="6,2" Margin="2,2,4,2"
@@ -3573,16 +3704,47 @@
                                             </ItemsControl.ItemsPanel>
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
+                                                    <Grid>
                                                     <Border x:Name="TabBorder"
                                                             Tag="{Binding}"
                                                             MouseLeftButtonDown="TerminalTab_MouseDown"
+                                                            MouseDown="TerminalTab_MiddleClick_Close"
+                                                            PreviewMouseMove="TerminalTab_PreviewMouseMove"
+                                                            AllowDrop="True"
+                                                            DragOver="TerminalTab_DragOver"
+                                                            DragLeave="TerminalTab_DragLeave"
+                                                            Drop="TerminalTab_Drop"
                                                             Background="Transparent"
                                                             BorderBrush="Transparent"
                                                             BorderThickness="0,0,0,2"
                                                             CornerRadius="3,3,0,0"
                                                             Padding="10,6,6,6"
                                                             Margin="2,2,2,-1"
-                                                            Cursor="Hand">
+                                                            Cursor="Hand"
+                                                            ToolTipService.InitialShowDelay="600">
+                                                        <Border.ToolTip>
+                                                            <ToolTip>
+                                                                <StackPanel MaxWidth="520">
+                                                                    <TextBlock Text="{Binding Title, Mode=OneWay}"
+                                                                               FontWeight="SemiBold"
+                                                                               TextTrimming="CharacterEllipsis"/>
+                                                                    <!-- Inline hex on label Runs: StaticResource FgDim is not
+                                                                         resolved inside the system tooltip's themed visual
+                                                                         tree, so the dim labels would otherwise pick up the
+                                                                         tooltip's default light foreground. -->
+                                                                    <TextBlock>
+                                                                        <Run Text="Shell:" Foreground="#7a7a80"/>
+                                                                        <Run Text=" "/>
+                                                                        <Run Text="{Binding Shell.Label, Mode=OneWay}"/>
+                                                                    </TextBlock>
+                                                                    <TextBlock TextTrimming="CharacterEllipsis">
+                                                                        <Run Text="cwd:" Foreground="#7a7a80"/>
+                                                                        <Run Text=" "/>
+                                                                        <Run Text="{Binding WorkingDirectory, Mode=OneWay}"/>
+                                                                    </TextBlock>
+                                                                </StackPanel>
+                                                            </ToolTip>
+                                                        </Border.ToolTip>
                                                         <Border.Style>
                                                             <Style TargetType="Border">
                                                                 <Style.Triggers>
@@ -3647,6 +3809,7 @@
                                                                          FontSize="11" VerticalAlignment="Center"
                                                                          MinWidth="80"
                                                                          Tag="{Binding}"
+                                                                         IsVisibleChanged="TerminalTab_TitleEdit_IsVisibleChanged"
                                                                          KeyDown="TerminalTab_TitleEdit_KeyDown"
                                                                          LostFocus="TerminalTab_TitleEdit_LostFocus">
                                                                     <TextBox.Style>
@@ -3663,6 +3826,98 @@
                                                             </Grid>
                                                         </DockPanel>
                                                     </Border>
+                                                    <!-- Drop indicator: a 2px accent bar pinned to the
+                                                         leading or trailing edge of the tab depending
+                                                         on whether the cursor is past the tab's center.
+                                                         Both rectangles are IsHitTestVisible=False so
+                                                         neither steals DragOver from the Border. -->
+                                                    <Rectangle Width="2"
+                                                               HorizontalAlignment="Left"
+                                                               Margin="2,2,0,0"
+                                                               Fill="{StaticResource Accent}"
+                                                               IsHitTestVisible="False"
+                                                               Panel.ZIndex="2"
+                                                               Opacity="0">
+                                                        <Rectangle.Style>
+                                                            <!-- Always-laid-out rectangle that fades in/out via
+                                                                 Storyboard so a fast drag across multiple tabs
+                                                                 doesn't flicker the visibility on/off. 60ms
+                                                                 keeps the indicator responsive without smear. -->
+                                                            <Style TargetType="Rectangle">
+                                                                <Style.Triggers>
+                                                                    <MultiDataTrigger>
+                                                                        <MultiDataTrigger.Conditions>
+                                                                            <Condition Binding="{Binding IsDropTarget}" Value="True"/>
+                                                                            <Condition Binding="{Binding DropAfter}" Value="False"/>
+                                                                        </MultiDataTrigger.Conditions>
+                                                                        <MultiDataTrigger.EnterActions>
+                                                                            <BeginStoryboard>
+                                                                                <Storyboard>
+                                                                                    <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                                                     To="1" Duration="0:0:0.06"/>
+                                                                                </Storyboard>
+                                                                            </BeginStoryboard>
+                                                                        </MultiDataTrigger.EnterActions>
+                                                                        <MultiDataTrigger.ExitActions>
+                                                                            <BeginStoryboard>
+                                                                                <Storyboard>
+                                                                                    <!-- Exit faster than enter (30ms vs 60ms) so the
+                                                                                         previous tab's indicator clears the screen
+                                                                                         before the new one's fade-in peaks — kills
+                                                                                         the brief "two indicators visible" overlap
+                                                                                         on a fast horizontal drag. -->
+                                                                                    <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                                                     To="0" Duration="0:0:0.03"/>
+                                                                                </Storyboard>
+                                                                            </BeginStoryboard>
+                                                                        </MultiDataTrigger.ExitActions>
+                                                                    </MultiDataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Rectangle.Style>
+                                                    </Rectangle>
+                                                    <Rectangle Width="2"
+                                                               HorizontalAlignment="Right"
+                                                               Margin="0,2,2,0"
+                                                               Fill="{StaticResource Accent}"
+                                                               IsHitTestVisible="False"
+                                                               Panel.ZIndex="2"
+                                                               Opacity="0">
+                                                        <Rectangle.Style>
+                                                            <Style TargetType="Rectangle">
+                                                                <Style.Triggers>
+                                                                    <MultiDataTrigger>
+                                                                        <MultiDataTrigger.Conditions>
+                                                                            <Condition Binding="{Binding IsDropTarget}" Value="True"/>
+                                                                            <Condition Binding="{Binding DropAfter}" Value="True"/>
+                                                                        </MultiDataTrigger.Conditions>
+                                                                        <MultiDataTrigger.EnterActions>
+                                                                            <BeginStoryboard>
+                                                                                <Storyboard>
+                                                                                    <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                                                     To="1" Duration="0:0:0.06"/>
+                                                                                </Storyboard>
+                                                                            </BeginStoryboard>
+                                                                        </MultiDataTrigger.EnterActions>
+                                                                        <MultiDataTrigger.ExitActions>
+                                                                            <BeginStoryboard>
+                                                                                <Storyboard>
+                                                                                    <!-- Exit faster than enter (30ms vs 60ms) so the
+                                                                                         previous tab's indicator clears the screen
+                                                                                         before the new one's fade-in peaks — kills
+                                                                                         the brief "two indicators visible" overlap
+                                                                                         on a fast horizontal drag. -->
+                                                                                    <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                                                     To="0" Duration="0:0:0.03"/>
+                                                                                </Storyboard>
+                                                                            </BeginStoryboard>
+                                                                        </MultiDataTrigger.ExitActions>
+                                                                    </MultiDataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Rectangle.Style>
+                                                    </Rectangle>
+                                                    </Grid>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
@@ -3742,7 +3997,23 @@
                                     Margin="8,0,0,0"
                                     Click="YoloRestart_Click"
                                     ToolTip="Restart the yolo terminal, resuming this conversation's saved session when one is available">
-                                <TextBlock Text="restart" FontSize="10" VerticalAlignment="Center"/>
+                            <TextBlock Text="restart" FontSize="10" VerticalAlignment="Center"/>
+                            </Button>
+                            <Button DockPanel.Dock="Right"
+                                    Style="{StaticResource FlatButton}"
+                                    MinWidth="0" Padding="6,2" Height="22"
+                                    Margin="8,0,0,0"
+                                    Click="ToolbarTerminal_Click"
+                                    ToolTip="Open the selected project folder in a terminal">
+                                <TextBlock Text=">_" FontSize="11" VerticalAlignment="Center"/>
+                            </Button>
+                            <Button DockPanel.Dock="Right"
+                                    Style="{StaticResource FlatButton}"
+                                    MinWidth="0" Padding="6,2" Height="22"
+                                    Margin="8,0,0,0"
+                                    Click="SettingsMenu_Click"
+                                    ToolTip="Settings">
+                                <TextBlock Text="⚙" FontSize="12" VerticalAlignment="Center"/>
                             </Button>
                             <TextBlock/>
                         </DockPanel>

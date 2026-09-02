@@ -163,6 +163,59 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set { if (Settings.AutoScrollTasks == value) return; Settings.AutoScrollTasks = value; SaveConfig(); OnChanged(); }
     }
 
+    public bool TerminalSaveOutputLocalTime
+    {
+        get => Settings.TerminalSaveOutputLocalTime;
+        set { if (Settings.TerminalSaveOutputLocalTime == value) return; Settings.TerminalSaveOutputLocalTime = value; SaveConfig(); OnChanged(); }
+    }
+
+    public string TerminalShellFallbackOrder
+    {
+        get => Settings.TerminalShellFallbackOrder ?? "";
+        set
+        {
+            var v = value ?? "";
+            if (Settings.TerminalShellFallbackOrder == v) return;
+            Settings.TerminalShellFallbackOrder = v;
+            SaveConfig();
+            OnChanged();
+        }
+    }
+
+    public string OpenRouterApiKey
+    {
+        get => Settings.OpenRouterApiKey ?? "";
+        set
+        {
+            var v = value?.Trim() ?? "";
+            if (Settings.OpenRouterApiKey == v) return;
+            Settings.OpenRouterApiKey = v;
+            SaveConfig();
+            OnChanged();
+            OnChanged(nameof(OpenRouterApiKeyStatus));
+        }
+    }
+
+    public string OpenRouterTitleModel
+    {
+        get => string.IsNullOrWhiteSpace(Settings.OpenRouterTitleModel)
+            ? LoopSettings.DefaultOpenRouterTitleModel
+            : Settings.OpenRouterTitleModel;
+        set
+        {
+            var v = string.IsNullOrWhiteSpace(value)
+                ? LoopSettings.DefaultOpenRouterTitleModel
+                : value.Trim();
+            if (Settings.OpenRouterTitleModel == v) return;
+            Settings.OpenRouterTitleModel = v;
+            SaveConfig();
+            OnChanged();
+        }
+    }
+
+    public string OpenRouterApiKeyStatus =>
+        string.IsNullOrWhiteSpace(OpenRouterApiKey) ? "not set" : "set";
+
     public ObservableCollection<string> RecentWorkingDirectories { get; } = new();
 
     public MainViewModel()

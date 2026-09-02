@@ -134,11 +134,13 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
     private readonly TasksFileService _tasksFile;
     private readonly LoopRunner _loopRunner;
     private readonly ConsoleLogStore _consoleLog;
+    private readonly Func<LoopSettings> _appSettingsProvider;
     private string? _pendingConsoleHistory;
     private readonly DispatcherTimer _tasksSaveDebounce;
     private readonly DispatcherTimer _uiTick;
     private DateTime? _iterStartUtc;
     private DateTime? _totalStartUtc;
+    private bool _isDisposed;
     private bool _suppressTasksSave;
     private string? _promptAtLastInjection;
 
@@ -180,6 +182,7 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         get => _settings.Name;
         set
         {
+            if (_isDisposed) return;
             var v = string.IsNullOrWhiteSpace(value) ? Id : value.Trim();
             if (_settings.Name == v) return;
             _settings.Name = v;
@@ -982,7 +985,55 @@ public sealed class ConversationViewModel : INotifyPropertyChanged, IDisposable
         }
         QueuedMessages.Add(new QueuedChatMessage(t));
         ChatInput = "";
+        TryStartAutoNaming(t);
         if (!IsRunning) _ = StartRunAsync(chatOnly: true);
+    }
+
+    // Fires once per conversation: the first user message we see while the
+    // title is still the placeholder ("Conversation N" / id) gets handed to
+    // the internal OpenRouter namer to invent a 3-6 word title. Background task,
+    // never blocks the chat send; result is dispatched onto the UI thread.
+    private bool _autoNameInFlight;
+    private void TryStartAutoNaming(string promptText)
+    {
+        if (_isDisposed) return;
+        if (_autoNameInFlight) return;
+        if (!ConversationNamer.IsDefaultName(Name, Id)) return;
+
+        var appSettings = _appSettingsProvider();
+        var apiKey = appSettings.OpenRouterApiKey;
+        var model = appSettings.OpenRouterTitleModel;
+        if (string.IsNullOrWhiteSpace(apiKey)) return;
+        _autoNameInFlight = true;
+
+        _ = Task.Run(async () =>
+        {
+            string? title = null;
+            try { title = await ConversationNamer.GenerateTitleAsync(apiKey, model, promptText); }
+            catch { /* network / spawn failures shouldn't surface */ }
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher == null)
+            {
+                _autoNameInFlight = false;
+                return;
+            }
+            await dispatcher.InvokeAsync(() =>
+            {
+                try
+                {
+                    // Re-check on the UI thread: the user may have typed their
+                    // own title in the meantime, in which case we don't clobber it.
+                    if (!string.IsNullOrWhiteSpace(title)
+                        && !_isDisposed
+                        && ConversationNamer.IsDefaultName(Name, Id))
+                        Name = title;
+                }
+                finally
+                {
+                    _autoNameInFlight = false;
+                }
+            });
+        });
     }
 
     public void RemoveQueued(QueuedChatMessage msg)
@@ -1234,11 +1285,16 @@ Hard rules for this turn:
         return s;
     }
 
-    public ConversationViewModel(string workingDirectory, ConversationSettings settings, Action persistSettings)
+    public ConversationViewModel(
+        string workingDirectory,
+        ConversationSettings settings,
+        Action persistSettings,
+        Func<LoopSettings>? appSettingsProvider = null)
     {
         _workingDirectory = workingDirectory;
         _settings = settings;
         _persistSettings = persistSettings;
+        _appSettingsProvider = appSettingsProvider ?? (() => new LoopSettings());
         QueuedMessages.CollectionChanged += (_, e) =>
         {
             // Swap per-item text subscriptions so the header's token total
@@ -1550,6 +1606,9 @@ Hard rules for this turn:
 
     private async Task StartRunAsync(bool chatOnly, bool forceContinueSession = false)
     {
+        if (_isDisposed) return;
+        if (!chatOnly)
+            TryStartAutoNaming(_prompt);
         _promptStore.FlushPrompt();
         _promptAtLastInjection = null;
         PromptPendingChange = false;
@@ -1623,6 +1682,32 @@ Hard rules for this turn:
         ConversationConsoleLineCount = 0;
         ToolConsoleLineCount = 0;
         ResetConversationLineState();
+    }
+
+    public string GetRecentYoloTerminalText(int maxChars)
+    {
+        if (maxChars <= 0) return "";
+        var session = _yoloSession ?? _yoloPanel?.ActiveSession;
+        if (session == null) return "";
+
+        try
+        {
+            var raw = session.GetOutputHistorySnapshot();
+            if (raw.Length == 0) return "";
+            var stripped = TerminalSessionViewModel.StripAnsi(raw);
+            var text = Encoding.UTF8.GetString(stripped);
+            text = System.Text.RegularExpressions.Regex.Replace(
+                text, @"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]+", " ");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"[ \t]{2,}", " ").Trim();
+            if (text.Length <= maxChars) return text;
+
+            var tail = text.Substring(text.Length - maxChars);
+            var firstNewline = tail.IndexOf('\n');
+            return firstNewline >= 0 && firstNewline < tail.Length - 1
+                ? tail.Substring(firstNewline + 1).Trim()
+                : tail.Trim();
+        }
+        catch { return ""; }
     }
 
     // ---------- conversation-view line filter ----------
@@ -1741,6 +1826,7 @@ Hard rules for this turn:
 
     public void Shutdown()
     {
+        if (_isDisposed) return;
         _loopRunner.Stop();
         _promptStore.FlushPrompt();
         FlushPersistSettings();
@@ -1759,6 +1845,7 @@ Hard rules for this turn:
         try { _yoloPanel?.Dispose(); } catch { }
         _yoloPanel = null;
         _yoloSession = null;
+        _isDisposed = true;
     }
 
     /// Yolo-mode terminal panel for this conversation. Lazily built the first
@@ -2060,6 +2147,7 @@ Hard rules for this turn:
     private DispatcherTimer? _persistDebounce;
     private void PersistSettings()
     {
+        if (_isDisposed) return;
         if (_persistDebounce == null)
         {
             _persistDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };

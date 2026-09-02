@@ -17,6 +17,7 @@ public sealed class ConsoleLogStore : IDisposable
     private readonly List<string> _lines = new();
     private string _partial = "";
     private readonly object _lock = new();
+    private bool _disposed;
 
     public ConsoleLogStore(string path)
     {
@@ -31,6 +32,7 @@ public sealed class ConsoleLogStore : IDisposable
     {
         lock (_lock)
         {
+            if (_disposed) return "";
             try
             {
                 if (!File.Exists(_path)) return "";
@@ -51,9 +53,11 @@ public sealed class ConsoleLogStore : IDisposable
 
     public void Append(string chunk)
     {
+        if (_disposed) return;
         if (string.IsNullOrEmpty(chunk)) return;
         lock (_lock)
         {
+            if (_disposed) return;
             var combined = _partial + chunk;
             var parts = combined.Split('\n');
             for (int i = 0; i < parts.Length - 1; i++) _lines.Add(parts[i]);
@@ -66,6 +70,7 @@ public sealed class ConsoleLogStore : IDisposable
 
     public void Flush()
     {
+        if (_disposed) return;
         string content;
         lock (_lock) { content = Render(); }
         try
@@ -79,6 +84,7 @@ public sealed class ConsoleLogStore : IDisposable
 
     public void Clear()
     {
+        if (_disposed) return;
         lock (_lock)
         {
             _lines.Clear();
@@ -103,7 +109,9 @@ public sealed class ConsoleLogStore : IDisposable
 
     public void Dispose()
     {
+        if (_disposed) return;
         _debounce.Stop();
         Flush();
+        _disposed = true;
     }
 }

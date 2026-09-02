@@ -43,6 +43,9 @@ public sealed class ConfigStore
 
                     MigrateLegacyProjectFields(cfg);
                     NormalizeRecentDirectories(cfg, keepMissing: true);
+                    if (string.IsNullOrWhiteSpace(cfg.OpenRouterTitleModel)
+                        || string.Equals(cfg.OpenRouterTitleModel, "openai/gpt-oss-safeguard-20b", StringComparison.OrdinalIgnoreCase))
+                        cfg.OpenRouterTitleModel = LoopSettings.DefaultOpenRouterTitleModel;
                     return cfg;
                 }
             }
